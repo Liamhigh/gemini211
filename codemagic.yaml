@@ -1,4 +1,11 @@
-- name: Provision keystore
+workflows:
+  android_release:
+    name: Provision keystore test
+    instance_type: linux_x2
+    max_build_duration: 30
+
+    scripts:
+      - name: Provision keystore
         script: |
           set -e
           if [ -n "$CM_KEYSTORE" ]; then
