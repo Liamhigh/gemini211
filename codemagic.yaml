@@ -1,18 +1,4 @@
-workflows:
-  android_release:
-    name: Verum Omnis - Android Release
-    instance_type: linux_x2
-    max_build_duration: 60
-    environment:
-      vars:
-        CM_KEYSTORE: $CM_KEYSTORE
-        CM_KEYSTORE_PASSWORD: $CM_KEYSTORE_PASSWORD
-        CM_KEY_ALIAS: $CM_KEY_ALIAS
-        CM_KEY_PASSWORD: $CM_KEY_PASSWORD
-        GOOGLE_SERVICES_JSON_B64: $GOOGLE_SERVICES_JSON_B64
-
-    scripts:
-      - name: Add Android (Capacitor) & sync
+- name: Add Android (Capacitor) & sync
         script: |
           set -e
           echo "Preparing Node environment"
@@ -22,34 +8,8 @@ workflows:
           echo "Installing Capacitor CLI and Android dependencies"
           npm install --legacy-peer-deps @capacitor/cli @capacitor/core @capacitor/android
 
+          echo "Ensuring Android platform exists"
+          npx cap add android || echo "Android already added"
+
           echo "Syncing Capacitor project"
           npx cap sync android
-
-      - name: Put google-services.json (if provided)
-        script: |
-          set -e
-          if [ -n "$GOOGLE_SERVICES_JSON_B64" ]; then
-            mkdir -p android/app
-            echo "$GOOGLE_SERVICES_JSON_B64" | base64 --decode > android/app/google-services.json
-            echo "google-services.json written."
-          else
-            echo "No GOOGLE_SERVICES_JSON_B64 found; skipping."
-          fi
-
-      - name: Provision signing keystore from env
-        script: |
-          set -e
-          if [ -n "$CM_KEYSTORE" ]; then
-            echo "$CM_KEYSTORE" | base64 --decode > android/verum-release.jks
-            echo "VOM_KEYSTORE=verum-release.jks" >> android/gradle.properties
-            echo "VOM_KEYSTORE_PASSWORD=$CM_KEYSTORE_PASSWORD" >> android/gradle.properties
-            echo "VOM_KEY_ALIAS=$CM_KEY_ALIAS" >> android/gradle.properties
-            echo "VOM_KEY_PASSWORD=$CM_KEY_PASSWORD" >> android/gradle.properties
-          fi
-
-      - name: Build APK & AAB
-        script: |
-          set -e
-          cd android
-          chmod +x gradlew
-          ./gradlew clean :app:assembleRelease :app:bundleRelease
