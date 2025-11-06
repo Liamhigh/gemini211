@@ -1,101 +1,35 @@
-workflows:
-  android_release:
-    name: Verum Omnis — Android Release
-    max_build_duration: 60
-    instance_type: mac_mini_m1
-
-    environment:
-      vars:
-        PACKAGE_NAME: "com.example.verumomnislegalassistant"
-        WEB_DIR: "dist"
-      groups:
-        - android_signing
-        - firebase_config
-      node: 18
-
-    triggering:
-      events:
-        - push
-      branch_patterns:
-        - pattern: main
-          include: true
-          source: true
-
-    scripts:
-      - name: Check Node version
-        script: |
-          node --version
-          npm --version
-
-      - name: Install dependencies
-        script: |
-          npm ci
-
-      - name: Build web assets
-        script: |
-          npm run build
-
-      - name: Set up Capacitor Android
-        script: |
-          npx cap init "Verum Omnis" "$PACKAGE_NAME" --web-dir="$WEB_DIR"
-          npx cap add android
-          npx cap copy android
-          npx cap sync android
-
-      - name: Setup Firebase
-        script: |
-          mkdir -p android/app
-          echo "$GOOGLE_SERVICES_JSON" > android/app/google-services.json
-          echo "Google Services JSON added"
-
-      - name: Configure Gradle for Firebase
-        script: |
-          cd android
-          # Add google-services plugin to project level build.gradle
-          if ! grep -q "com.google.gms:google-services" build.gradle; then
-            sed -i '/dependencies {/a\        classpath "com.google.gms:google-services:4.4.0"' build.gradle
-          fi
-          
-          # Apply google-services plugin to app level build.gradle
-          if ! grep -q "com.google.gms.google-services" app/build.gradle; then
-            echo "" >> app/build.gradle
-            echo "apply plugin: 'com.google.gms.google-services'" >> app/build.gradle
-          fi
-
-      - name: Setup signing
-        script: |
-          if [ -n "$CM_KEYSTORE" ]; then
-            echo $CM_KEYSTORE | base64 --decode > android/app/keystore.jks
-            cat >> android/key.properties <<EOL
-storePassword=$CM_KEYSTORE_PASSWORD
-keyPassword=$CM_KEY_PASSWORD
-keyAlias=$CM_KEY_ALIAS
-storeFile=keystore.jks
-EOL
-            echo "Signing configured"
-          else
-            echo "No signing credentials found"
-          fi
-
-      - name: Build Android Release
-        script: |
-          cd android
-          chmod +x ./gradlew
-          ./gradlew assembleRelease
-
-      - name: Process artifacts
-        script: |
-          mkdir -p build_artifacts
-          find android/app/build/outputs -name "*.apk" -exec cp {} build_artifacts/ \;
-          
-          # Generate checksums
-          cd build_artifacts
-          for apk in *.apk; do
-            sha256sum "$apk" > "${apk}.sha256"
-            sha512sum "$apk" > "${apk}.sha512"
-          done
-          
-          ls -la
-
-    artifacts:
-      - build_artif
+scripts:
+  - name: Prepare Android & Capacitor
+    script: |
+      npx cap sync android
+      cd android
+      # decode signing keystore
+      echo "$CM_KEYSTORE" | base64 --decode > verum-release.jks
+      cat >> gradle.properties <<EOF
+      VOM_KEYSTORE=verum-release.jks
+      VOM_KEYSTORE_PASSWORD=$CM_KEYSTORE_PASSWORD
+      VOM_KEY_ALIAS=$CM_KEY_ALIAS
+      VOM_KEY_PASSWORD=$CM_KEY_PASSWORD
+      EOF
+      # inject google-services.json
+      cd app
+      echo "$GOOGLE_SERVICES_JSON_B64" | base64 --decode > google-services.json
+      cd ..
+  - name: Build APK & AAB
+    script: |
+      cd android
+      ./gradlew clean :app:assembleRelease :app:bundleRelease
+  - name: Compute SHA-512 & QR metadata
+    script: |
+      APK=android/app/build/outputs/apk/release/app-release.apk
+      SHA=$(sha512sum "$APK" | awk '{print $1}')
+      echo "$SHA" > "${APK}.sha512"
+      NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+      cat > "${APK}.qr.json" <<EOF
+      {
+        "created_at": "$NOW",
+        "file_count": 1,
+        "hash": "$SHA",
+        "config_version": "5.2.0"
+      }
+      EOF
