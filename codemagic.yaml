@@ -18,4 +18,9 @@ scripts:
 
       echo "=== Building APK & AAB ==="
       cd android
-      ./gradlew assembleRelease
+      chmod +x gradlew
+      ./gradlew clean
+      ./gradlew assembleRelease --stacktrace --info
+
+      echo "=== Build complete ==="
+      ls -R app/build/outputs/apk/release || echo "No APK found"
