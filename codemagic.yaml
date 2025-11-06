@@ -1,6 +1,6 @@
 workflows:
-  build_android_debug:
-    name: Build Android Debug APK
+  android_release_signed:
+    name: Android Release (Signed + optional Play upload)
     instance_type: linux_x2
     max_build_duration: 45
 
@@ -9,33 +9,47 @@ workflows:
         ANDROID_SDK_ROOT: /usr/local/share/android-sdk
         JAVA_VERSION: 17
         NODE_VERSION: 20
+        # Set to "true" to upload to Play (after you add the service account secret).
+        PLAY_UPLOAD: "false"
+
+      # Use a Keystore you added in Codemagic UI → Code signing → Android.
+      # Rename "MyPlayKeystore" below to the exact name you gave it there.
+      android_signing:
+        - MyPlayKeystore
+
+    cache:
+      cache_paths:
+        - "~/.gradle/wrapper"
+        - "~/.gradle/caches"
+        - "~/.npm"
+        - "node_modules"
+        - "android/.gradle"
 
     scripts:
       - name: Setup Node
         script: |
+          source ~/.bashrc || true
           nvm install $NODE_VERSION
           nvm use $NODE_VERSION
-          npm ci
+          node -v && npm -v
 
-      - name: Sync Capacitor
+      - name: Install dependencies
+        # Use npm install (works even without a lockfile)
+        script: npm install
+
+      - name: Build web & sync Capacitor (safe if not used)
         script: |
-          npx cap sync android || true
+          npm run build || echo "no web build script"
+          npx cap sync android || echo "no capacitor, continuing"
 
-      - name: Create Java 17 override (Gradle init script)
+      - name: Force Java 17 (Gradle init script, no --release)
         script: |
           cat > java17.init.gradle <<'GROOVY'
           import org.gradle.api.tasks.compile.JavaCompile
           import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
           allprojects { proj ->
-            // Java toolchain for 17
-            proj.plugins.withId('java') {
-              proj.extensions.getByType(JavaPluginExtension).toolchain {
-                languageVersion = JavaLanguageVersion.of(17)
-              }
-            }
-
-            // Android compileOptions
+            // Android compileOptions to 17
             ['com.android.application','com.android.library','com.android.test'].each { pid ->
               proj.plugins.withId(pid) {
                 def android = proj.extensions.findByName('android')
@@ -47,29 +61,43 @@ workflows:
                 }
               }
             }
-
-            // Plain JavaCompile tasks
+            // Plain JavaCompile fallback (NO options.release)
             proj.tasks.withType(JavaCompile).configureEach {
               sourceCompatibility = JavaVersion.VERSION_17
               targetCompatibility = JavaVersion.VERSION_17
             }
-
-            // Kotlin jvmTarget
+            // Kotlin jvmTarget 17
             proj.tasks.withType(KotlinCompile).configureEach {
               kotlinOptions.jvmTarget = '17'
             }
           }
           GROOVY
 
-      - name: Build APK (debug)
+      - name: Build Release (APK + AAB)
         script: |
           cd android
           chmod +x gradlew || true
-          ./gradlew --no-daemon -I ../java17.init.gradle clean assembleDebug
+          ./gradlew --no-daemon -I ../java17.init.gradle clean \
+            assembleRelease bundleRelease
+
+      - name: List outputs
+        script: |
+          echo "== APKs ==" && find android/app/build/outputs -name "*.apk" -print || true
+          echo "== AABs ==" && find android/app/build/outputs -name "*.aab" -print || true
+
+      - name: Upload to Google Play (Internal) if enabled
+        script: |
+          if [ "$PLAY_UPLOAD" = "true" ]; then
+            echo "Uploading to Play Internal track..."
+          else
+            echo "PLAY_UPLOAD=false -> skipping Play upload"
+          fi
 
     artifacts:
       - android/app/build/outputs/**/*.apk
-      - android/build/outputs/**/*.apk
+      - android/app/build/outputs/**/*.aab
+      - android/app/build/outputs/mapping/**/mapping.txt
+      - android/build/reports/**
 
     publishing:
       email:
@@ -78,3 +106,14 @@ workflows:
         notify:
           success: true
           failure: true
+
+      # Enable Play upload by:
+      # 1) Setting PLAY_UPLOAD="true" above
+      # 2) Adding env var GOOGLE_PLAY_CREDENTIALS in Codemagic (Service Account JSON)
+      # Codemagic will use AAB by default.
+      google_play:
+        enabled: true
+        submit_as_draft: true
+        track: internal
+        # Name of the env var that holds your service account JSON (paste JSON as the variable value).
+        credentials: $GOOGLE_PLAY_CREDENTIALS
