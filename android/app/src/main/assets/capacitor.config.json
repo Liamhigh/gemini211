@@ -1,0 +1,6 @@
+{
+	"appId": "com.example.verumomnislegalassistant",
+	"appName": "Verum Omnis",
+	"webDir": "dist",
+	"bundledWebRuntime": false
+}
