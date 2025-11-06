@@ -1,23 +1,53 @@
-echo "== 2) Build web =="
-npm run build || npx vite build || true
-rm -rf www
-[ -d dist ] && cp -r dist www || { mkdir -p www; echo '<h1>Verum</h1>' > www/index.html; }
+workflows:
+  android_release:
+    name: Verum Omnis — Fast APK
+    instance_type: linux_x2
+    max_build_duration: 45
 
-echo "== 3) Create capacitor.config.json =="
-cat > capacitor.config.json <<'EOF'
-{
-  "appId": "foundation.verum.global",
-  "appName": "Verum Omnis",
-  "webDir": "www",
-  "bundledWebRuntime": false
-}
-EOF
-cat capacitor.config.json
+    scripts:
+      - name: Build & package Android
+        script: |
+          set -euo pipefail
 
-echo "== 4) Create/repair native Android project =="
-if [ -d android ] && [ ! -f android/settings.gradle ]; then
-  echo "Removing empty android folder..."
-  rm -rf android
-fi
-npx cap add android || echo "android already added"
-npx cap sync android
+          echo "== 0) Dummy signing =="
+          mkdir -p android
+          keytool -genkey -v -keystore android/verum-dummy.jks -storepass Verum123! -keypass Verum123! \
+            -alias verum -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Verum, OU=Omnis, O=Foundation, L=Global, ST=World, C=AI"
+
+          echo "== 1) Install deps =="
+          npm ci --legacy-peer-deps || npm install --legacy-peer-deps
+
+          echo "== 2) Build web =="
+          npm run build || npx vite build || true
+          rm -rf www
+          if [ -d dist ]; then
+            cp -r dist www
+          else
+            mkdir -p www && echo '<h1>Verum</h1>' > www/index.html
+          fi
+
+          echo "== 3) Create capacitor.config.json =="
+          cat > capacitor.config.json <<'JSON'
+          {
+            "appId": "foundation.verum.global",
+            "appName": "Verum Omnis",
+            "webDir": "www",
+            "bundledWebRuntime": false
+          }
+          JSON
+          cat capacitor.config.json
+
+          echo "== 4) Add/sync Android =="
+          npm i -g @capacitor/cli
+          if [ -d android ] && [ ! -f android/settings.gradle ]; then rm -rf android; fi
+          npx cap add android || echo "android already added"
+          npx cap sync android
+
+          echo "== 5) Build APK =="
+          cd android
+          chmod +x gradlew || true
+          ./gradlew --no-daemon :app:assembleDebug
+
+    artifacts:
+      - android/app/build/outputs/**/*.apk
