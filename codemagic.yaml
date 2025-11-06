@@ -1,105 +1,101 @@
 workflows:
   android_release:
-    name: Verum Omnis — Android Release (Capacitor)
+    name: Verum Omnis — Android Release
     max_build_duration: 60
-    instance_type: linux_x2
+    instance_type: mac_mini_m1
 
     environment:
       vars:
         PACKAGE_NAME: "com.example.verumomnislegalassistant"
         WEB_DIR: "dist"
-        JAVA_VERSION: "17"
       groups:
         - android_signing
         - firebase_config
-      cache:
-        cache_paths:
-          - ~/.gradle/caches
-          - ~/.gradle/wrapper
-          - $FCI_BUILD_DIR/node_modules
-          - $FCI_BUILD_DIR/android/.gradle
-          - $FCI_BUILD_DIR/android/app/build
+      node: 18
+
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+          source: true
 
     scripts:
-      - name: Prepare toolchain
+      - name: Check Node version
         script: |
-          sudo update-alternatives --set java /usr/lib/jvm/java-17-openjdk-amd64/bin/java
-          java -version
-          node --version || true
-          npm --version || true
+          node --version
+          npm --version
 
-      - name: Install JS deps & build web
+      - name: Install dependencies
         script: |
-          npm ci || npm install
-          npm run build || npx vite build
+          npm ci
 
-      - name: Capacitor Android project
+      - name: Build web assets
         script: |
-          npx cap init "Verum Omnis" "$PACKAGE_NAME" --web-dir="$WEB_DIR" --npm-client npm || true
-          npx cap add android || true
+          npm run build
+
+      - name: Set up Capacitor Android
+        script: |
+          npx cap init "Verum Omnis" "$PACKAGE_NAME" --web-dir="$WEB_DIR"
+          npx cap add android
           npx cap copy android
           npx cap sync android
 
-      - name: Inject google-services.json
+      - name: Setup Firebase
         script: |
           mkdir -p android/app
           echo "$GOOGLE_SERVICES_JSON" > android/app/google-services.json
-          echo "[OK] google-services.json added."
+          echo "Google Services JSON added"
 
-      - name: Wire Google Services Gradle plugin
-        script: |
-          if ! grep -q "com.google.gms:google-services" android/build.gradle; then
-            sed -i "/dependencies[[:space:]]*{/a\        classpath 'com.google.gms:google-services:4.4.2'" android/build.gradle
-          fi
-          if ! grep -q "com.google.gms.google-services" android/app/build.gradle; then
-            printf "\napply plugin: 'com.google.gms.google-services'\n" >> android/app/build.gradle
-          fi
-          if ! grep -q "firebase-bom" android/app/build.gradle; then
-            sed -i "/dependencies[[:space:]]*{/a\    implementation platform('com.google.firebase:firebase-bom:33.5.1')\n    implementation 'com.google.firebase:firebase-common-ktx'" android/app/build.gradle
-          fi
-
-      - name: (Optional) Keystore for signing
-        script: |
-          if [ -n "${CM_KEYSTORE_BASE64:-}" ]; then
-            echo "$CM_KEYSTORE_BASE64" | base64 -d > android/app/keystore.jks
-            cat > android/key.properties <<'EOF'
-storePassword=$CM_Ashbash78
-keyPassword=$CM_Ashbash78
-keyAlias=$CM_verumomnis
-storeFile=keystore.jks
-EOF
-            echo "[OK] key.properties created."
-          else
-            echo "[SKIP] No keystore secrets provided."
-          fi
-
-      - name: Build APK (release)
+      - name: Configure Gradle for Firebase
         script: |
           cd android
-          ./gradlew --no-daemon clean assembleRelease
+          # Add google-services plugin to project level build.gradle
+          if ! grep -q "com.google.gms:google-services" build.gradle; then
+            sed -i '/dependencies {/a\        classpath "com.google.gms:google-services:4.4.0"' build.gradle
+          fi
+          
+          # Apply google-services plugin to app level build.gradle
+          if ! grep -q "com.google.gms.google-services" app/build.gradle; then
+            echo "" >> app/build.gradle
+            echo "apply plugin: 'com.google.gms.google-services'" >> app/build.gradle
+          fi
 
-      - name: Generate checksums & QR
+      - name: Setup signing
         script: |
-          APK=$(find android/app/build/outputs/apk/release -type f -name "*release*.apk" | head -n1)
-          mkdir -p artifacts
-          cp "$APK" artifacts/app-release.apk
-          (cd artifacts && sha512sum app-release.apk | awk '{print $1}' > app-release.sha512)
-          (cd artifacts && sha256sum app-release.apk | awk '{print $1}' > app-release.sha256)
-          echo '{"url":"","sha512":"'"$(cat artifacts/app-release.sha512)"'"}' > artifacts/qr_payload.json
-          sudo apt-get update -y && sudo apt-get install -y qrencode
-          qrencode -o artifacts/app-release-qr.png "$(cat artifacts/qr_payload.json)"
-          ls -la artifacts
+          if [ -n "$CM_KEYSTORE" ]; then
+            echo $CM_KEYSTORE | base64 --decode > android/app/keystore.jks
+            cat >> android/key.properties <<EOL
+storePassword=$CM_KEYSTORE_PASSWORD
+keyPassword=$CM_KEY_PASSWORD
+keyAlias=$CM_KEY_ALIAS
+storeFile=keystore.jks
+EOL
+            echo "Signing configured"
+          else
+            echo "No signing credentials found"
+          fi
+
+      - name: Build Android Release
+        script: |
+          cd android
+          chmod +x ./gradlew
+          ./gradlew assembleRelease
+
+      - name: Process artifacts
+        script: |
+          mkdir -p build_artifacts
+          find android/app/build/outputs -name "*.apk" -exec cp {} build_artifacts/ \;
+          
+          # Generate checksums
+          cd build_artifacts
+          for apk in *.apk; do
+            sha256sum "$apk" > "${apk}.sha256"
+            sha512sum "$apk" > "${apk}.sha512"
+          done
+          
+          ls -la
 
     artifacts:
-      - artifacts/app-release.apk
-      - artifacts/app-release.sha512
-      - artifacts/app-release.sha256
-      - artifacts/app-release-qr.png
-
-    publishing:
-      email:
-        recipients:
-          - "liam@verumglobal.foundation"
-        notify:
-          success: true
-          failure: true
+      - build_artif
