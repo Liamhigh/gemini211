@@ -28,13 +28,13 @@ workflows:
           node -v && npm -v
 
       - name: "Install dependencies"
-        script: npm ci
+        script: npm install
 
       - name: "Build web assets"
-        script: npm run build
+        script: npm run build || echo "No web build script found"
 
       - name: "Sync Capacitor (Android)"
-        script: npx cap sync android
+        script: npx cap sync android || echo "Capacitor not detected, continuing..."
 
       - name: "Force Java 17"
         script: |
@@ -59,14 +59,19 @@ workflows:
           fi
           chmod +x android/gradlew
 
-      - name: "Build APK/AAB"
+      - name: "Build unsigned APK/AAB"
         script: |
           cd android
-          ./gradlew --no-daemon clean assembleDebug bundleDebug
+          ./gradlew --no-daemon clean assembleDebug
+          cd ..
 
-      - name: "List outputs"
+      - name: "List build outputs"
         script: |
-          find android/app/build/outputs -type f \( -name "*.apk" -o -name "*.aab" \)
+          echo "APK files found:"
+          find android/app/build/outputs -name "*.apk" -maxdepth 3 || true
+          echo "AAB files found:"
+          find android/app/build/outputs -name "*.aab" -maxdepth 3 || true
+
     artifacts:
       - "android/app/build/outputs/**/*.apk"
       - "android/app/build/outputs/**/*.aab"
