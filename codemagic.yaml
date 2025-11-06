@@ -9,23 +9,14 @@ workflows:
         script: |
           set -euo pipefail
 
-          echo "== 0) Dummy signing =="
-          mkdir -p android
-          keytool -genkey -v -keystore android/verum-dummy.jks -storepass Verum123! -keypass Verum123! \
-            -alias verum -keyalg RSA -keysize 2048 -validity 10000 \
-            -dname "CN=Verum, OU=Omnis, O=Foundation, L=Global, ST=World, C=AI"
-
           echo "== 1) Install deps =="
           npm ci --legacy-peer-deps || npm install --legacy-peer-deps
+          npm install @capacitor/core @capacitor/cli @capacitor/android --save --legacy-peer-deps
 
           echo "== 2) Build web =="
           npm run build || npx vite build || true
           rm -rf www
-          if [ -d dist ]; then
-            cp -r dist www
-          else
-            mkdir -p www && echo '<h1>Verum</h1>' > www/index.html
-          fi
+          [ -d dist ] && cp -r dist www || { mkdir -p www && echo '<h1>Verum</h1>' > www/index.html; }
 
           echo "== 3) Create capacitor.config.json =="
           cat > capacitor.config.json <<'JSON'
@@ -39,8 +30,10 @@ workflows:
           cat capacitor.config.json
 
           echo "== 4) Add/sync Android =="
-          npm i -g @capacitor/cli
-          if [ -d android ] && [ ! -f android/settings.gradle ]; then rm -rf android; fi
+          if [ -d android ] && [ ! -f android/settings.gradle ]; then
+            echo "Removing empty android folder..."
+            rm -rf android
+          fi
           npx cap add android || echo "android already added"
           npx cap sync android
 
