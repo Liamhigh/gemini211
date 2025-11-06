@@ -4,60 +4,39 @@ workflows:
     instance_type: linux_x2
     max_build_duration: 45
 
-    environment:
-      vars:
-        # Optional: if you later want Firebase in the build,
-        # add this *App* variable in Codemagic and paste base64 of android/app/google-services.json:
-        # GOOGLE_SERVICES_JSON_B64: ""
-
     scripts:
-      - name: Build release APK (self-contained)
+      - name: Build release APK
         script: |
-          #!/usr/bin/env bash
-          set -euo pipefail
+          set -e
 
-          echo "== 1) Dummy signing keystore =="
+          echo "== 1) Dummy signing =="
           mkdir -p android
-          keytool -genkey -v \
-            -keystore android/verum-dummy.jks \
-            -storepass Verum123! -keypass Verum123! \
+          keytool -genkey -v -keystore android/verum-dummy.jks -storepass Verum123! -keypass Verum123! \
             -alias verum -keyalg RSA -keysize 2048 -validity 10000 \
             -dname "CN=Verum, OU=Omnis, O=Foundation, L=Global, ST=World, C=AI"
+          echo "VOM_KEYSTORE=verum-dummy.jks"        >> android/gradle.properties
+          echo "VOM_KEYSTORE_PASSWORD=Verum123!"     >> android/gradle.properties
+          echo "VOM_KEY_ALIAS=verum"                 >> android/gradle.properties
+          echo "VOM_KEY_PASSWORD=Verum123!"          >> android/gradle.properties
 
-          # Sign props for Gradle (app module reads these)
-          {
-            echo "VOM_KEYSTORE=verum-dummy.jks"
-            echo "VOM_KEYSTORE_PASSWORD=Verum123!"
-            echo "VOM_KEY_ALIAS=verum"
-            echo "VOM_KEY_PASSWORD=Verum123!"
-          } >> android/gradle.properties
-
-          echo "== 2) Install deps & build web (if script exists) =="
+          echo "== 2) Install deps & build web (if present) =="
           npm ci --legacy-peer-deps || npm install --legacy-peer-deps
-          if grep -q '"build":' package.json; then
-            npm run build || npx vite build || true
-          fi
+          if grep -q '"build":' package.json; then npm run build || true; fi
 
-          echo "== 3) Capacitor Android add/sync =="
+          echo "== 3) Capacitor add/sync =="
           npm install -g @capacitor/cli
           npx cap add android || echo "android/ already present"
-          # Optional Firebase injection from env:
-          if [ -n "${GOOGLE_SERVICES_JSON_B64:-}" ]; then
-            mkdir -p android/app
-            echo "$GOOGLE_SERVICES_JSON_B64" | base64 --decode > android/app/google-services.json
-            echo "Injected android/app/google-services.json"
-          fi
           npx cap sync android
 
-          echo "== 4) Gradle release build =="
+          echo "== 4) Gradle assembleRelease =="
           cd android
-          chmod +x gradlew
+          chmod +x gradlew || true
           ./gradlew --no-daemon clean
           ./gradlew --no-daemon :app:assembleRelease --stacktrace --info
 
-          echo "== 5) Show artifacts =="
+          echo "== 5) Show APK path =="
           ls -lh app/build/outputs/apk/release || true
-          echo "APK path should be: android/app/build/outputs/apk/release/app-release.apk"
+          echo "APK: android/app/build/outputs/apk/release/app-release.apk"
 
     artifacts:
       - android/app/build/outputs/**/*.apk
