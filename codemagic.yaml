@@ -1,108 +1,26 @@
-workflows:
-  android_release:
-    name: Verum Omnis — Android Release
-    instance_type: linux_x2
-    max_build_duration: 60
+workflows: android_release: name: Verum Omnis — Android Release instance_type: linux_x2 max_build_duration: 60
 
-    environment:
-      # No groups. Reads app-level variables only.
-      # REQUIRED app-level vars:
-      #   CM_KEYSTORE            -> base64 of verumomnis-release-key.jks
-      #   CM_KEYSTORE_PASSWORD   -> e.g. Verum123!
-      # OPTIONAL app-level vars:
-      #   CM_KEY_ALIAS           -> defaults to "verumomnis"
-      #   CM_KEY_PASSWORD        -> defaults to CM_KEYSTORE_PASSWORD
-      #   GOOGLE_SERVICES_JSON_B64 -> base64 of android/app/google-services.json
-      vars:
-        PACKAGE_NAME: "com.example.verumomnislegalassistant"
-        WEB_DIR: "dist"
-        JAVA_VERSION: "17"
+scripts:
+  - name: Add Android (Capacitor) & sync
+    script: |
+      set -e
+      echo "Repo root:"
+      ls -la
 
-    scripts:
-      - name: Install deps & build web
-        script: |
-          node -v
-          npm ci || npm install
-          npm run build || npx vite build
+      # Make sure Capacitor deps exist (no-op if already present)
+      node -e "require.resolve('@capacitor/cli')" 2>/dev/null || npm i -D @capacitor/cli
+      node -e "require.resolve('@capacitor/android')" 2>/dev/null || npm i @capacitor/android
 
-      - name: Add Android (Capacitor) & sync
-        script: |
-          npx cap sync android
+      # Initialize android platform on fresh CI clones
+      if [ ! -d android ]; then
+        echo "No android/ folder found. Adding platform…"
+        npx cap add android
+      else
+        echo "android/ folder exists."
+      fi
 
-      - name: Put google-services.json (if provided)
-        script: |
-          if [ -n "$GOOGLE_SERVICES_JSON_B64" ]; then
-            echo "$GOOGLE_SERVICES_JSON_B64" | base64 -d > android/app/google-services.json
-            echo "google-services.json written."
-          else
-            echo "GOOGLE_SERVICES_JSON_B64 not set; continuing without it."
-          fi
+      # Always sync web assets + plugins
+      npx cap sync android
 
-      - name: Provision signing keystore from env
-        script: |
-          set -e
-          mkdir -p android
-          echo "$CM_KEYSTORE" | base64 -d > android/verum-release.jks
-
-          # Defaults if you don't set CM_KEY_ALIAS / CM_KEY_PASSWORD
-          KEY_ALIAS="${CM_KEY_ALIAS:-verumomnis}"
-          KEY_PASS="${CM_KEY_PASSWORD:-$CM_KEYSTORE_PASSWORD}"
-
-          cat >> android/gradle.properties <<EOF
-          VOM_KEYSTORE=verum-release.jks
-          VOM_KEYSTORE_PASSWORD=${CM_KEYSTORE_PASSWORD}
-          VOM_KEY_ALIAS=${KEY_ALIAS}
-          VOM_KEY_PASSWORD=${KEY_PASS}
-          EOF
-
-          # Ensure release signingConfig exists and is used
-          sed -i 's/applicationId "[^"]\+"/applicationId "'"$PACKAGE_NAME"'"/' android/app/build.gradle || true
-          if ! grep -q "signingConfigs {.*release" -z android/app/build.gradle; then
-            awk '
-              /buildTypes {/ && !p {
-                print; print "        signingConfigs {"
-                print "            release {"
-                print "                storeFile file(VOM_KEYSTORE)"
-                print "                storePassword VOM_KEYSTORE_PASSWORD"
-                print "                keyAlias VOM_KEY_ALIAS"
-                print "                keyPassword VOM_KEY_PASSWORD"
-                print "            }"
-                print "        }"
-                p=1; next
-              }1
-            ' android/app/build.gradle > android/app/build.gradle.tmp && mv android/app/build.gradle.tmp android/app/build.gradle
-          fi
-          sed -i 's/signingConfig signingConfigs.debug/signingConfig signingConfigs.release/' android/app/build.gradle || true
-
-      - name: Build APK & AAB
-        script: |
-          cd android
-          ./gradlew --no-daemon -Pandroid.useAndroidX=true -Porg.gradle.jvmargs="-Xmx3g" \
-            clean :app:assembleRelease :app:bundleRelease
-
-      - name: Compute SHA-512 & QR metadata
-        script: |
-          APK=android/app/build/outputs/apk/release/app-release.apk
-          if [ -f "$APK" ]; then
-            SHA=$(sha512sum "$APK" | awk '{print $1}')
-            echo "$SHA" > "${APK}.sha512"
-            NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-            cat > "${APK}.qr.json" <<EOF
-            {
-              "created_at": "$NOW",
-              "file_count": 1,
-              "hash": "$SHA",
-              "config_version": "5.2.0"
-            }
-            EOF
-            echo "APK SHA-512: $SHA"
-          else
-            echo "APK not found, skipping SHA/QR step."
-          fi
-
-    artifacts:
-      - android/app/build/outputs/**/*.apk
-      - android/app/build/outputs/**/*.aab
-      - android/app/build/outputs/**/*.mapping.txt
-      - android/app/build/outputs/**/*.sha512
-      - android/app/build/outputs/**/*.qr.json
+      # Show a quick tree for sanity
+      ls -la android/app/src/main/assets || true
