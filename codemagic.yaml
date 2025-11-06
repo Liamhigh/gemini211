@@ -1,20 +1,45 @@
-- name: Put google-services.json (if provided)
+workflows:
+  android_release:
+    name: Verum Omnis - Android Release
+    instance_type: linux_x2
+    max_build_duration: 60
+    environment:
+      vars:
+        CM_KEYSTORE: $CM_KEYSTORE
+        CM_KEYSTORE_PASSWORD: $CM_KEYSTORE_PASSWORD
+        CM_KEY_ALIAS: $CM_KEY_ALIAS
+        CM_KEY_PASSWORD: $CM_KEY_PASSWORD
+        GOOGLE_SERVICES_JSON_B64: $GOOGLE_SERVICES_JSON_B64
+
+    scripts:
+      - name: Add Android (Capacitor) & sync
+        script: |
+          set -e
+          echo "Preparing Node environment"
+          node -v
+          npm -v
+
+          echo "Installing Capacitor CLI and Android dependencies"
+          npm install --legacy-peer-deps @capacitor/cli @capacitor/core @capacitor/android
+
+          echo "Syncing Capacitor project"
+          npx cap sync android
+
+      - name: Put google-services.json (if provided)
         script: |
           set -e
           if [ -n "$GOOGLE_SERVICES_JSON_B64" ]; then
-            echo "Writing google-services.json"
             mkdir -p android/app
             echo "$GOOGLE_SERVICES_JSON_B64" | base64 --decode > android/app/google-services.json
-            ls -la android/app/google-services.json
+            echo "google-services.json written."
           else
-            echo "GOOGLE_SERVICES_JSON_B64 not set, skipping."
+            echo "No GOOGLE_SERVICES_JSON_B64 found; skipping."
           fi
 
       - name: Provision signing keystore from env
         script: |
           set -e
           if [ -n "$CM_KEYSTORE" ]; then
-            echo "Restoring release keystore"
             echo "$CM_KEYSTORE" | base64 --decode > android/verum-release.jks
             cat >> android/gradle.properties <<EOF
 
@@ -23,8 +48,6 @@ VOM_KEYSTORE_PASSWORD=$CM_KEYSTORE_PASSWORD
 VOM_KEY_ALIAS=$CM_KEY_ALIAS
 VOM_KEY_PASSWORD=$CM_KEY_PASSWORD
 EOF
-          else
-            echo "CM_KEYSTORE not set, using debug signing."
           fi
 
       - name: Build APK & AAB
@@ -32,27 +55,4 @@ EOF
           set -e
           cd android
           chmod +x gradlew
-          ./gradlew --version
           ./gradlew clean :app:assembleRelease :app:bundleRelease
-
-      - name: Compute SHA-512 & QR metadata
-        script: |
-          set -e
-          APK=android/app/build/outputs/apk/release/app-release.apk
-          if [ -f "$APK" ]; then
-            SHA=$(sha512sum "$APK" | awk '{print $1}')
-            echo "$SHA" > "${APK}.sha512"
-            NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-            cat > "${APK}.qr.json" <<EOF
-{
-  "created_at": "$NOW",
-  "file_count": 1,
-  "hash": "$SHA",
-  "config_version": "5.2.0"
-}
-EOF
-            echo "APK SHA-512: $SHA"
-          else
-            echo "APK not found at $APK"
-            exit 1
-          fi
