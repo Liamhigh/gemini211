@@ -1,46 +1,154 @@
 workflows:
   android_release:
-    name: Verum Omnis — Fast APK
-    instance_type: linux_x2
+    name: Verum Omnis — Android Release
     max_build_duration: 45
+    instance_type: linux_x2
+
+    environment:
+      # Tool versions
+      vars:
+        JAVA_VERSION: 17
+        NODE_VERSION: 20
+        ANDROID_SDK_ROOT: /opt/android-sdk-linux
+        # Optional: tune Gradle memory for bigger builds
+        GRADLE_OPTS: -Xmx3g -Dorg.gradle.daemon=false -Dorg.gradle.jvmargs="-Xmx3g -XX:+UseParallelGC"
+      # If you add a keystore in Codemagic UI (Settings → Code signing), reference it here:
+      android_signing:
+        - keystore_reference: VerumKeystore   # <-- change to your keystore name in Codemagic
+      # Or, if you prefer env vars (Settings → Environment variables), create a group named keystore_credentials
+      # with CM_KEYSTORE (base64), CM_KEYSTORE_PASSWORD, CM_KEY_PASSWORD, CM_KEY_ALIAS and uncomment groups:
+      # groups:
+      #   - keystore_credentials
+
+    cache:
+      cache_paths:
+        - ~/.gradle/caches
+        - ~/.gradle/wrapper
+        - ~/.npm
+        - android/.gradle
+        - node_modules
 
     scripts:
-      - name: Build & package Android
+      - name: Print environment
         script: |
-          set -euo pipefail
+          echo "JAVA_VERSION=$JAVA_VERSION"
+          echo "NODE_VERSION=$NODE_VERSION"
 
-          echo "== 1) Install deps =="
-          npm ci --legacy-peer-deps || npm install --legacy-peer-deps
-          npm install @capacitor/core @capacitor/cli @capacitor/android --save --legacy-peer-deps
+      - name: Set up Node.js
+        script: |
+          # Codemagic has nvm preinstalled
+          source ~/.bashrc || true
+          nvm install $NODE_VERSION
+          nvm use $NODE_VERSION
+          node -v
+          npm -v
 
-          echo "== 2) Build web =="
-          npm run build || npx vite build || true
-          rm -rf www
-          [ -d dist ] && cp -r dist www || { mkdir -p www && echo '<h1>Verum</h1>' > www/index.html; }
+      - name: Install dependencies
+        script: |
+          npm ci
 
-          echo "== 3) Create capacitor.config.json =="
-          cat > capacitor.config.json <<'JSON'
-          {
-            "appId": "foundation.verum.global",
-            "appName": "Verum Omnis",
-            "webDir": "www",
-            "bundledWebRuntime": false
-          }
-          JSON
-          cat capacitor.config.json
+      - name: Build web assets
+        script: |
+          # Change if your build script differs (e.g. `npm run build:web`)
+          npm run build
 
-          echo "== 4) Add/sync Android =="
-          if [ -d android ] && [ ! -f android/settings.gradle ]; then
-            echo "Removing empty android folder..."
-            rm -rf android
-          fi
-          npx cap add android || echo "android already added"
+      - name: Sync Capacitor (Android)
+        script: |
           npx cap sync android
 
-          echo "== 5) Build APK =="
-          cd android
-          chmod +x gradlew || true
-          ./gradlew --no-daemon :app:assembleDebug
+      - name: Force Java 17 in Gradle toolchain (prevents 'invalid source release: 21')
+        script: |
+          cat > android/gradle-java17.gradle <<'EOF'
+          allprojects {
+            tasks.withType(JavaCompile).configureEach {
+              sourceCompatibility = JavaVersion.VERSION_17
+              targetCompatibility = JavaVersion.VERSION_17
+              if (options.hasProperty("release")) options.release = 17
+            }
+          }
+          subprojects {
+            plugins.withId("org.jetbrains.kotlin.android") {
+              tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+                kotlinOptions { jvmTarget = "17" }
+              }
+            }
+          }
+          EOF
+          # Apply at top of root build.gradle if not already present
+          if ! grep -q "apply from: 'gradle-java17.gradle'" android/build.gradle; then
+            sed -i "1i apply from: 'gradle-java17.gradle'" android/build.gradle
+          fi
+          # Ensure wrapper is executable
+          chmod +x android/gradlew
 
+      - name: (Optional) Decode keystore from env vars
+        script: |
+          if [ -n "${CM_KEYSTORE:-}" ]; then
+            echo "$CM_KEYSTORE" | base64 -d > $CM_BUILD_DIR/keystore.jks
+            export CM_KEYSTORE_PATH="$CM_BUILD_DIR/keystore.jks"
+            echo "Decoded keystore to $CM_KEYSTORE_PATH"
+          else
+            echo "No CM_KEYSTORE env provided; relying on Codemagic keystore_reference (if configured) or debug signing."
+          fi
+
+      - name: Build Release APK/AAB
+        script: |
+          cd android
+          # If you use signingConfigs.release in app/build.gradle, Codemagic will inject creds automatically
+          ./gradlew --no-daemon clean bundleRelease assembleRelease
+
+      - name: Print outputs
+        script: |
+          echo "APK files:"
+          find android/app/build/outputs -name "*.apk" -maxdepth 3
+          echo "AAB files:"
+          find android/app/build/outputs -name "*.aab" -maxdepth 3
+
+    artifacts:
+      - android/app/build/outputs/**/*.apk
+      - android/app/build/outputs/**/*.aab
+      - android/app/build/outputs/mapping/**/mapping.txt
+      - android/build/reports/**
+
+    publishing:
+      # Email results to you
+      email:
+        recipients:
+          - liam@verumglobal.foundation
+        notify:
+          success: true
+          failure: true
+      # (Optional) Google Play publishing can be added here later via service account JSON
+
+  # Optional quick debug build
+  android_debug:
+    name: Verum Omnis — Android Debug
+    max_build_duration: 30
+    instance_type: linux_x2
+    environment:
+      vars:
+        JAVA_VERSION: 17
+        NODE_VERSION: 20
+    cache:
+      cache_paths:
+        - ~/.gradle/caches
+        - ~/.gradle/wrapper
+        - ~/.npm
+        - android/.gradle
+        - node_modules
+    scripts:
+      - name: Node & deps
+        script: |
+          source ~/.bashrc || true
+          nvm install $NODE_VERSION
+          nvm use $NODE_VERSION
+          npm ci
+          npm run build
+          npx cap sync android
+          chmod +x android/gradlew
+      - name: Assemble debug
+        script: |
+          cd android
+          ./gradlew --no-daemon assembleDebug
     artifacts:
       - android/app/build/outputs/**/*.apk
