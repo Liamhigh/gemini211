@@ -7,26 +7,3 @@ workflows:
     scripts:
       - name: Prep and Build
         script: |
-          set -e
-          echo "=== Quick dummy signing setup ==="
-          mkdir -p android
-          keytool -genkey -v -keystore android/verum-dummy.jks -storepass Verum123! -keypass Verum123! \
-            -alias verum -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Verum, OU=Omnis, O=Foundation, L=Global, ST=World, C=AI"
-          echo "storeFile=verum-dummy.jks" >> android/gradle.properties
-          echo "storePassword=Verum123!" >> android/gradle.properties
-          echo "keyAlias=verum" >> android/gradle.properties
-          echo "keyPassword=Verum123!" >> android/gradle.properties
-
-          echo "=== Installing dependencies ==="
-          npm install --legacy-peer-deps
-          npx cap add android || echo "Android already present"
-          npx cap sync android
-
-          echo "=== Building APK & AAB ==="
-          cd android
-          chmod +x gradlew
-          ./gradlew clean
-          ./gradlew assembleRelease --stacktrace --info
-
-          echo "=== Build complete ==="
-          ls -R app/build/outputs/apk/release || echo "No APK found"
