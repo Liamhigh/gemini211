@@ -6,7 +6,6 @@ workflows:
 
     environment:
       vars:
-        # Required: provide these in Codemagic UI (App variables). Keep names exactly as below.
         CM_KEYSTORE: $CM_KEYSTORE
         CM_KEYSTORE_PASSWORD: $CM_KEYSTORE_PASSWORD
         CM_KEY_ALIAS: $CM_KEY_ALIAS
@@ -15,65 +14,48 @@ workflows:
       node: v20.11.1
       npm: 10.2.4
 
-    cache:
-      cache_paths:
-        - ~/.npm
-        - android/.gradle
-        - android/.gradle/caches
-        - android/.gradle/wrapper
-
     scripts:
       - name: Install deps & build web
         script: |
           set -e
-          echo "Node: $(node -v)  npm: $(npm -v)"
+          echo "Node: $(node -v) npm: $(npm -v)"
           npm ci --legacy-peer-deps
-          # Build your web bundle (Vite or npm run build)
-          if npm run | grep -qE '^  build'; then
-            npm run build
-          else
-            npx vite build
-          fi
+          npm run build || npx vite build
 
       - name: Add Android (Capacitor) & sync
         script: |
           set -e
-          # Ensure Capacitor CLI exists on the runner
           npm install -g @capacitor/cli
-          # Add platform once (idempotent)
           if [ ! -d "android" ]; then
             npx cap add android
           fi
-          # Copy web to native & sync plugins
           npx cap sync android
 
-      - name: Put google-services.json (if provided)
+      - name: Add google-services.json
         script: |
           set -e
           if [ -n "$GOOGLE_SERVICES_JSON_B64" ]; then
             mkdir -p android/app
             echo "$GOOGLE_SERVICES_JSON_B64" | base64 --decode > android/app/google-services.json
-            echo "✅ Wrote android/app/google-services.json"
+            echo "✅ google-services.json added"
           else
-            echo "ℹ️ GOOGLE_SERVICES_JSON_B64 not set; skipping Firebase config"
+            echo "⚠️ GOOGLE_SERVICES_JSON_B64 not provided"
           fi
 
-      - name: Provision signing keystore
+      - name: Provision keystore
         script: |
           set -e
           if [ -n "$CM_KEYSTORE" ]; then
             echo "$CM_KEYSTORE" | base64 --decode > android/verum-release.jks
-            echo "✅ Decoded keystore to android/verum-release.jks"
-            # Inject signing props for Gradle
             cat >> android/gradle.properties <<EOF
 VOM_KEYSTORE=verum-release.jks
 VOM_KEYSTORE_PASSWORD=${CM_KEYSTORE_PASSWORD}
 VOM_KEY_ALIAS=${CM_KEY_ALIAS}
 VOM_KEY_PASSWORD=${CM_KEY_PASSWORD}
 EOF
-            echo "✅ Appended signing props to android/gradle.properties"
+            echo "✅ Signing properties added"
           else
-            echo "❌ CM_KEYSTORE is empty — cannot sign release"
+            echo "❌ CM_KEYSTORE missing"
             exit 1
           fi
 
@@ -95,17 +77,15 @@ EOF
             cat > "${APK}.qr.json" <<EOF
 {
   "created_at": "$NOW",
-  "file_count": 1,
   "hash": "$SHA",
   "config_version": "5.2.0"
 }
 EOF
             echo "✅ SHA-512: $SHA"
           else
-            echo "❌ APK not found at $APK"
+            echo "❌ APK missing"
             exit 1
           fi
-          # Also checksum the AAB (optional but handy)
           if [ -f "$AAB" ]; then
             sha512sum "$AAB" | awk '{print $1}' > "${AAB}.sha512"
           fi
@@ -120,7 +100,7 @@ EOF
     publishing:
       email:
         recipients:
-          - your.email@domain.com
+          - liam@verumglobal.foundation
         notify:
           success: true
           failure: true
