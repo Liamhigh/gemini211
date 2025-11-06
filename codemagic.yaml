@@ -41,13 +41,10 @@ workflows:
           set -e
           if [ -n "$CM_KEYSTORE" ]; then
             echo "$CM_KEYSTORE" | base64 --decode > android/verum-release.jks
-            cat >> android/gradle.properties <<EOF
-
-VOM_KEYSTORE=verum-release.jks
-VOM_KEYSTORE_PASSWORD=$CM_KEYSTORE_PASSWORD
-VOM_KEY_ALIAS=$CM_KEY_ALIAS
-VOM_KEY_PASSWORD=$CM_KEY_PASSWORD
-EOF
+            echo "VOM_KEYSTORE=verum-release.jks" >> android/gradle.properties
+            echo "VOM_KEYSTORE_PASSWORD=$CM_KEYSTORE_PASSWORD" >> android/gradle.properties
+            echo "VOM_KEY_ALIAS=$CM_KEY_ALIAS" >> android/gradle.properties
+            echo "VOM_KEY_PASSWORD=$CM_KEY_PASSWORD" >> android/gradle.properties
           fi
 
       - name: Build APK & AAB
