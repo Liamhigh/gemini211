@@ -5,45 +5,69 @@ workflows:
     max_build_duration: 45
 
     scripts:
-      - name: Build release APK
+      - name: Build & package Android
         script: |
-          set -e
-          echo "== 1) Dummy signing =="
+          set -euo pipefail
+
+          echo "== 0) Dummy signing =="
           mkdir -p android
           keytool -genkey -v -keystore android/verum-dummy.jks -storepass Verum123! -keypass Verum123! \
             -alias verum -keyalg RSA -keysize 2048 -validity 10000 \
             -dname "CN=Verum, OU=Omnis, O=Foundation, L=Global, ST=World, C=AI"
 
-          # If your app/build.gradle reads signing creds from gradle.properties, set them:
           {
             echo "VOM_KEYSTORE=verum-dummy.jks"
             echo "VOM_KEYSTORE_PASSWORD=Verum123!"
             echo "VOM_KEY_ALIAS=verum"
             echo "VOM_KEY_PASSWORD=Verum123!"
-          } >> android/gradle.properties
+          } >> android/gradle.properties || true
 
-          echo "== 2) Web build =="
+          echo "== 1) Install deps & web build =="
           npm ci --legacy-peer-deps || npm install --legacy-peer-deps
           npm run build || npx vite build || true
-          if [ -d "dist" ]; then
-            echo "Copying dist → www"
-            rm -rf www && cp -r dist www
+
+          echo "== 2) Normalize webDir to ./www =="
+          # Decide where the bundler output landed
+          OUT=""
+          [ -d dist ]  && OUT="dist"
+          [ -d build ] && OUT="build"
+          if [ -z "${OUT}" ]; then
+            echo "No dist/ or build/ output found; creating minimal www/index.html"
+            mkdir -p www
+            echo '<!doctype html><meta charset="utf-8"><title>Verum</title><h1>Verum</h1>' > www/index.html
+          else
+            rm -rf www && cp -r "${OUT}" www
           fi
 
-          echo "== 3) Capacitor add/sync =="
+          echo "== 3) Ensure capacitor.config webDir = 'www' =="
+          if [ -f capacitor.config.json ]; then
+            # Patch JSON
+            node -e "let fs=require('fs');let p='capacitor.config.json';let o=JSON.parse(fs.readFileSync(p,'utf8'));o.webDir='www';fs.writeFileSync(p,JSON.stringify(o,null,2));"
+          elif [ -f capacitor.config.ts ]; then
+            # Replace webDir in TS (very tolerant)
+            perl -0777 -pe "s/webDir:\s*['\"][^'\"]*['\"]/webDir: 'www'/g; s/(defineConfig\(\{)([\s\S]*?)\}\)/\${1}\${2}\}/g" -i capacitor.config.ts
+            grep -q "webDir" capacitor.config.ts || echo "export default { webDir: 'www' }" > capacitor.config.ts
+          elif [ -f capacitor.config.js ]; then
+            perl -0777 -pe "s/webDir:\s*['\"][^'\"]*['\"]/webDir: 'www'/g" -i capacitor.config.js
+            grep -q "webDir" capacitor.config.js || echo "module.exports = { webDir: 'www' }" > capacitor.config.js
+          else
+            echo '{"webDir":"www"}' > capacitor.config.json
+          fi
+
+          echo "== 4) Capacitor sync =="
           npm i -g @capacitor/cli
           npx cap add android || echo "android already added"
-          npx cap sync android   # (no --no-interactive)
+          npx cap sync android   # no --no-interactive
 
-          echo "== 4) Gradle assembleRelease =="
+          echo "== 5) Gradle assembleRelease =="
           cd android
           chmod +x gradlew || true
           ./gradlew --no-daemon clean
           ./gradlew --no-daemon :app:assembleRelease --stacktrace --info
 
-          echo "== 5) Artifacts =="
+          echo "== 6) Show artifacts =="
           ls -lh app/build/outputs/apk/release || true
-          echo "APK path: android/app/build/outputs/apk/release/app-release.apk"
+          echo "APK path => android/app/build/outputs/apk/release/app-release.apk"
 
     artifacts:
       - android/app/build/outputs/**/*.apk
