@@ -41,7 +41,7 @@ workflows:
           ANDROID_DIR=$(find . -type d -name "android" -maxdepth 2 | head -n1)
           if [ -d "$ANDROID_DIR" ]; then
             echo "Detected Android directory: $ANDROID_DIR"
-            cat <<'EOF' > "$ANDROID_DIR/gradle-java17.gradle"
+            echo '
 allprojects {
   tasks.withType(JavaCompile).configureEach {
     sourceCompatibility = JavaVersion.VERSION_17
@@ -56,13 +56,14 @@ subprojects {
     }
   }
 }
-EOF
+' > "$ANDROID_DIR/gradle-java17.gradle"
+
             if ! grep -q "apply from: 'gradle-java17.gradle'" "$ANDROID_DIR/build.gradle"; then
               sed -i "1i apply from: 'gradle-java17.gradle'" "$ANDROID_DIR/build.gradle"
             fi
             chmod +x "$ANDROID_DIR/gradlew" || true
           else
-            echo "⚠️ No android folder detected — skipping Java17 patch"
+            echo "⚠️  No android folder detected — skipping Java17 patch"
           fi
 
       - name: "Build APK"
@@ -72,7 +73,7 @@ EOF
             cd "$ANDROID_DIR"
             ./gradlew --no-daemon clean assembleDebug
           else
-            echo "⚠️ No android project found to build"
+            echo "⚠️  No android project found to build"
           fi
 
       - name: "List build outputs"
