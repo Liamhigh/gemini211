@@ -1,35 +1,67 @@
-scripts:
-  - name: Prepare Android & Capacitor
-    script: |
-      npx cap sync android
-      cd android
-      # decode signing keystore
-      echo "$CM_KEYSTORE" | base64 --decode > verum-release.jks
-      cat >> gradle.properties <<EOF
-      VOM_KEYSTORE=verum-release.jks
-      VOM_KEYSTORE_PASSWORD=$CM_KEYSTORE_PASSWORD
-      VOM_KEY_ALIAS=$CM_KEY_ALIAS
-      VOM_KEY_PASSWORD=$CM_KEY_PASSWORD
-      EOF
-      # inject google-services.json
-      cd app
-      echo "$GOOGLE_SERVICES_JSON_B64" | base64 --decode > google-services.json
-      cd ..
-  - name: Build APK & AAB
-    script: |
-      cd android
-      ./gradlew clean :app:assembleRelease :app:bundleRelease
-  - name: Compute SHA-512 & QR metadata
-    script: |
-      APK=android/app/build/outputs/apk/release/app-release.apk
-      SHA=$(sha512sum "$APK" | awk '{print $1}')
-      echo "$SHA" > "${APK}.sha512"
-      NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-      cat > "${APK}.qr.json" <<EOF
-      {
-        "created_at": "$NOW",
-        "file_count": 1,
-        "hash": "$SHA",
-        "config_version": "5.2.0"
-      }
-      EOF
+# codemagic.yaml (root of repo)
+workflows:
+  android_release:
+    name: Verum Omnis — Android Release
+    instance_type: linux_x2           # fast Linux VM for Android
+    max_build_duration: 60
+
+    environment:
+      # Your Android package must match google-services.json
+      vars:
+        PACKAGE_NAME: com.example.verumomnislegalassistant
+      # These groups must exist in Codemagic → Environment variables
+      groups:
+        - keystore    # CM_KEYSTORE, CM_KEYSTORE_PASSWORD, CM_KEY_ALIAS, CM_KEY_PASSWORD
+        - firebase    # GOOGLE_SERVICES_JSON_B64  (service account optional)
+
+    scripts:
+      - name: Install deps
+        script: npm ci
+
+      - name: Build web assets
+        script: npm run build || npx vite build
+
+      - name: Prepare Android & Capacitor
+        script: |
+          npx cap sync android
+          cd android
+          # decode signing keystore
+          echo "$CM_KEYSTORE" | base64 --decode > verum-release.jks
+          cat >> gradle.properties <<EOF
+          VOM_KEYSTORE=verum-release.jks
+          VOM_KEYSTORE_PASSWORD=$CM_KEYSTORE_PASSWORD
+          VOM_KEY_ALIAS=$CM_KEY_ALIAS
+          VOM_KEY_PASSWORD=$CM_KEY_PASSWORD
+          EOF
+          # inject google-services.json
+          cd app
+          echo "$GOOGLE_SERVICES_JSON_B64" | base64 --decode > google-services.json
+          cd ..
+
+      - name: Build APK & AAB
+        script: |
+          cd android
+          ./gradlew clean :app:assembleRelease :app:bundleRelease
+
+      - name: Compute SHA-512 & QR metadata
+        script: |
+          # each script starts at repo root; APK path is from root:
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          SHA=$(sha512sum "$APK" | awk '{print $1}')
+          echo "$SHA" > "${APK}.sha512"
+          NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          cat > "${APK}.qr.json" <<EOF
+          {
+            "created_at": "$NOW",
+            "file_count": 1,
+            "hash": "$SHA",
+            "config_version": "5.2.0"
+          }
+          EOF
+
+    artifacts:
+      - android/app/build/outputs/**/*.apk
+      - android/app/build/outputs/**/*.aab
+      - android/app/build/outputs/**/*.mapping.txt
+      - android/app/build/outputs/apk/release/app-release.apk.sha512
+      - android/app/build/outputs/apk/release/app-release.apk.qr.json
