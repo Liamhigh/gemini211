@@ -1,92 +1,81 @@
-workflows:
-  android_release:
-    name: "Verum Omnis — Android Release"
-    max_build_duration: 45
-    instance_type: "linux_x2"
+name: Android Debug APK
 
-    environment:
-      vars:
-        # Codemagic Linux images use this SDK path
-        ANDROID_SDK_ROOT: "/usr/local/share/android-sdk"
-        JAVA_VERSION: 17
-        NODE_VERSION: 20
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
 
-    cache:
-      cache_paths:
-        - "~/.gradle/caches"
-        - "~/.gradle/wrapper"
-        - "~/.npm"
-        - "node_modules"
-        - "**/android/.gradle"
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      JAVA_VERSION: '17'
+      NODE_VERSION: '20'
 
-    scripts:
-      - name: "Set up Node.js"
-        script: |
-          source ~/.bashrc || true
-          nvm install $NODE_VERSION
-          nvm use $NODE_VERSION
-          node -v && npm -v
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: "Install dependencies"
-        script: npm install
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
 
-      - name: "Ensure Android platform exists"
-        script: |
-          ANDROID_DIR=$(find . -maxdepth 2 -type d -name android | head -n1 || true)
-          if [ -z "$ANDROID_DIR" ]; then
-            echo "No android/ folder; trying Capacitor..."
-            if npx cap --version >/dev/null 2>&1; then
-              npx cap add android || true
-              npx cap sync android || true
-              ANDROID_DIR=$(find . -maxdepth 2 -type d -name android | head -n1 || true)
-            fi
-          fi
-          if [ -z "$ANDROID_DIR" ]; then
-            echo "❌ No android project found to build."; exit 1
-          fi
-          echo "Android directory: $ANDROID_DIR"
+      - name: Install JS deps
+        run: npm install
 
-      - name: "Create Java 17 override (Gradle init script)"
-        script: |
+      - name: Sync Capacitor (if present)
+        run: |
+          npx cap --version >/dev/null 2>&1 && npx cap sync android || echo "No Capacitor, continuing"
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Install Android SDK packages
+        run: |
+          yes | sudo ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager \
+            "platform-tools" "platforms;android-35" "build-tools;35.0.0" || true
+
+      - name: Force Java 17 across modules (Gradle init script)
+        run: |
           cat > java17.init.gradle <<'GROOVY'
           import org.gradle.api.tasks.compile.JavaCompile
-
           allprojects {
             tasks.withType(JavaCompile).configureEach { jc ->
               sourceCompatibility = JavaVersion.VERSION_17
               targetCompatibility = JavaVersion.VERSION_17
-              if (jc.options.hasProperty('release')) {
-                jc.options.release = 17
-              }
+              if (jc.options.hasProperty('release')) jc.options.release = 17
             }
             tasks.matching { it.name.toLowerCase().contains('kotlin') }.configureEach { t ->
-              if (t.hasProperty('kotlinOptions')) {
-                t.kotlinOptions.jvmTarget = '17'
-              }
+              if (t.hasProperty('kotlinOptions')) t.kotlinOptions.jvmTarget = '17'
             }
           }
           GROOVY
 
-      - name: "Build APK (debug)"
-        script: |
-          ANDROID_DIR=$(find . -maxdepth 2 -type d -name android | head -n1)
-          cd "$ANDROID_DIR"
-          chmod +x gradlew || true
-          ./gradlew --no-daemon -I ../java17.init.gradle clean assembleDebug
+      - name: Locate Android dir
+        id: find_android
+        run: |
+          ANDROID_DIR=$(find . -maxdepth 2 -type d -name android | head -n1 || true)
+          if [ -z "$ANDROID_DIR" ]; then
+            echo "No android/ folder found"; exit 1
+          fi
+          echo "dir=$ANDROID_DIR" >> $GITHUB_OUTPUT
 
-      - name: "List outputs"
-        script: |
-          find . -type f \( -name "*.apk" -o -name "*.aab" \) -print || true
+      - name: Make gradlew executable
+        run: chmod +x "${{ steps.find_android.outputs.dir }}/gradlew"
 
-    artifacts:
-      - "**/build/outputs/**/*.apk"
-      - "**/build/outputs/**/*.aab"
-      - "**/build/reports/**"
+      - name: Build debug APK
+        working-directory: ${{ steps.find_android.outputs.dir }}
+        run: ./gradlew --no-daemon -I ../java17.init.gradle clean assembleDebug
 
-    publishing:
-      email:
-        recipients:
-          - "liam@verumglobal.foundation"
-        notify:
-          success: true
-          failure: true
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: |
+            ${{ steps.find_android.outputs.dir }}/app/build/outputs/**/*.apk
+            ${{ steps.find_android.outputs.dir }}/build/outputs/**/*.apk
