@@ -1,6 +1,6 @@
 workflows:
   android_release:
-    name: Verum Omnis — Android Release
+    name: Verum Omnis - Android Release
     instance_type: linux_x2
     max_build_duration: 60
 
@@ -8,14 +8,17 @@ workflows:
       - name: Add Android (Capacitor) & sync
         script: |
           set -e
-          echo "Repo root:"
-          ls -la
+          echo "Preparing Node environment"
+          node -v
+          npm -v
 
-          # Make sure Capacitor deps exist (no-op if already present)
-          node -e "require.resolve('@capacitor/cli')" 2>/dev/null || npm i -D @capacitor/cli
-          node -e "require.resolve('@capacitor/android')" 2>/dev/null || npm i @capacitor/android
+          echo "Installing Capacitor CLI and Android dependencies"
+          npm install --legacy-peer-deps @capacitor/cli @capacitor/core @capacitor/android
 
-          # Initialize android platform on fresh CI clones
+          echo "Checking installed packages"
+          npx cap --version
+
+          # If android folder doesn’t exist, add it
           if [ ! -d android ]; then
             echo "No android/ folder found. Adding platform…"
             npx cap add android
@@ -23,8 +26,8 @@ workflows:
             echo "android/ folder exists."
           fi
 
-          # Always sync web assets + plugins
+          echo "Syncing Capacitor"
           npx cap sync android
 
-          # Show a quick tree for sanity
-          ls -la android/app/src/main/assets || true
+          echo "Done syncing. Showing android folder contents:"
+          ls -la android || true
