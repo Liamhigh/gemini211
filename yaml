@@ -120,6 +120,7 @@ if (keystorePropertiesFile.exists()) {\n\
           cd android
           ./gradlew --no-daemon clean assembleRelease
 
+
       - name: Generate checksums & QR
         script: |
           APK=$(find android/app/build/outputs/apk/release -type f -name "*release*.apk" | head -n1)
