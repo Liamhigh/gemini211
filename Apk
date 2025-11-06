@@ -1,0 +1,112 @@
+name: android-build-and-seal
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  ANDROID_SDK_ROOT: /opt/android-sdk
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java (11)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-cache-${{ runner.os }}-${{ hashFiles('**/*.gradle*','**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-cache-${{ runner.os }}-
+
+      - name: Install repo JS deps
+        run: |
+          npm ci
+        working-directory: ./android/.. # adjust if needed (root or mobile folder)
+
+      - name: Prepare keystore
+        # Expects KEYSTORE_BASE64 secret
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 --decode > $GITHUB_WORKSPACE/keystore.jks
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+
+      - name: Build Android release (assembleRelease)
+        working-directory: android
+        env:
+          JAVA_HOME: ${{ env.JAVA_HOME }}
+        run: |
+          ./gradlew clean assembleRelease -Porg.gradle.jvmargs="-Xmx2g"
+
+      - name: Sign & Align APK (if your Gradle doesn't auto-sign)
+        if: always()
+        run: |
+          mkdir -p release_out
+          UNSIGNED_APK=$(find android/app/build/outputs/apk/release -name "*-release-unsigned.apk" | head -n1)
+          if [ -f "$UNSIGNED_APK" ]; then
+            echo "Found unsigned APK: $UNSIGNED_APK"
+            jarsigner -keystore $GITHUB_WORKSPACE/keystore.jks -storepass "${{ secrets.KEYSTORE_PASSWORD }}" -keypass "${{ secrets.KEY_PASSWORD }}" "$UNSIGNED_APK" "${{ secrets.KEY_ALIAS }}"
+            ZIPALIGNED_APK=release_out/app-release-signed.apk
+            ${ANDROID_SDK_ROOT}/build-tools/*/zipalign -v -p 4 "$UNSIGNED_APK" "$ZIPALIGNED_APK" || true
+          else
+            echo "No unsigned apk found. Looking for release apk..."
+            cp android/app/build/outputs/apk/release/app-release.apk release_out/app-release-signed.apk || true
+          fi
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+
+      - name: Bundle PDF sealing library into Android assets
+        run: |
+          # run the sealing script that packages a small sealing helper (crypto + pdf utilities)
+          node ./scripts/seal_pdf_bundle.js ./build/seal-lib
+          # copy the bundle into Android assets so the app can require/use it client-side
+          mkdir -p android/app/src/main/assets/verum_seal
+          cp -r ./build/seal-lib/* android/app/src/main/assets/verum_seal/
+        env:
+          NODE_ENV: production
+
+      - name: Rebuild with assets included (optional)
+        working-directory: android
+        run: |
+          ./gradlew assembleRelease
+
+      - name: Upload signed APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: verum-omnis-apk
+          path: release_out/app-release-signed.apk
+
+      - name: Create GitHub Release (optional)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release_out/app-release-signed.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
