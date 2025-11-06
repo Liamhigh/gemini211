@@ -1,106 +1,14 @@
-workflows:
-  android_release:
-    name: Verum Omnis — Android Release
-    instance_type: linux_x2
-    max_build_duration: 60
-
-    environment:
-      vars:
-        CM_KEYSTORE: $CM_KEYSTORE
-        CM_KEYSTORE_PASSWORD: $CM_KEYSTORE_PASSWORD
-        CM_KEY_ALIAS: $CM_KEY_ALIAS
-        CM_KEY_PASSWORD: $CM_KEY_PASSWORD
-        GOOGLE_SERVICES_JSON_B64: $GOOGLE_SERVICES_JSON_B64
-      node: v20.11.1
-      npm: 10.2.4
-
-    scripts:
-      - name: Install deps & build web
-        script: |
-          set -e
-          echo "Node: $(node -v) npm: $(npm -v)"
-          npm ci --legacy-peer-deps
-          npm run build || npx vite build
-
-      - name: Add Android (Capacitor) & sync
-        script: |
-          set -e
-          npm install -g @capacitor/cli
-          if [ ! -d "android" ]; then
-            npx cap add android
-          fi
-          npx cap sync android
-
-      - name: Add google-services.json
-        script: |
-          set -e
-          if [ -n "$GOOGLE_SERVICES_JSON_B64" ]; then
-            mkdir -p android/app
-            echo "$GOOGLE_SERVICES_JSON_B64" | base64 --decode > android/app/google-services.json
-            echo "✅ google-services.json added"
-          else
-            echo "⚠️ GOOGLE_SERVICES_JSON_B64 not provided"
-          fi
-
-      - name: Provision keystore
+- name: Provision keystore
         script: |
           set -e
           if [ -n "$CM_KEYSTORE" ]; then
             echo "$CM_KEYSTORE" | base64 --decode > android/verum-release.jks
-            cat >> android/gradle.properties <<EOF
-VOM_KEYSTORE=verum-release.jks
-VOM_KEYSTORE_PASSWORD=${CM_KEYSTORE_PASSWORD}
-VOM_KEY_ALIAS=${CM_KEY_ALIAS}
-VOM_KEY_PASSWORD=${CM_KEY_PASSWORD}
-EOF
+            echo "VOM_KEYSTORE=verum-release.jks" >> android/gradle.properties
+            echo "VOM_KEYSTORE_PASSWORD=${CM_KEYSTORE_PASSWORD}" >> android/gradle.properties
+            echo "VOM_KEY_ALIAS=${CM_KEY_ALIAS}" >> android/gradle.properties
+            echo "VOM_KEY_PASSWORD=${CM_KEY_PASSWORD}" >> android/gradle.properties
             echo "✅ Signing properties added"
           else
             echo "❌ CM_KEYSTORE missing"
             exit 1
           fi
-
-      - name: Build APK & AAB
-        script: |
-          set -e
-          cd android
-          ./gradlew --no-daemon clean :app:assembleRelease :app:bundleRelease
-
-      - name: Compute SHA-512 & QR metadata
-        script: |
-          set -e
-          APK="android/app/build/outputs/apk/release/app-release.apk"
-          AAB="android/app/build/outputs/bundle/release/app-release.aab"
-          if [ -f "$APK" ]; then
-            SHA=$(sha512sum "$APK" | awk '{print $1}')
-            echo "$SHA" > "${APK}.sha512"
-            NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-            cat > "${APK}.qr.json" <<EOF
-{
-  "created_at": "$NOW",
-  "hash": "$SHA",
-  "config_version": "5.2.0"
-}
-EOF
-            echo "✅ SHA-512: $SHA"
-          else
-            echo "❌ APK missing"
-            exit 1
-          fi
-          if [ -f "$AAB" ]; then
-            sha512sum "$AAB" | awk '{print $1}' > "${AAB}.sha512"
-          fi
-
-    artifacts:
-      - android/app/build/outputs/apk/release/app-release.apk
-      - android/app/build/outputs/apk/release/app-release.apk.sha512
-      - android/app/build/outputs/apk/release/app-release.apk.qr.json
-      - android/app/build/outputs/bundle/release/app-release.aab
-      - android/app/build/outputs/bundle/release/app-release.aab.sha512
-
-    publishing:
-      email:
-        recipients:
-          - liam@verumglobal.foundation
-        notify:
-          success: true
-          failure: true
