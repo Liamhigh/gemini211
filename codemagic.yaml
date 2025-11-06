@@ -1,6 +1,6 @@
 workflows:
-  android_release:
-    name: "Verum Omnis — Android Release"
+  android_release_signed:
+    name: "Verum Omnis — Android Release (Signed)"
     max_build_duration: 45
     instance_type: "linux_x2"
 
@@ -11,7 +11,10 @@ workflows:
         ANDROID_SDK_ROOT: "/opt/android-sdk-linux"
         GRADLE_OPTS: "-Xmx3g -Dorg.gradle.daemon=false -Dorg.gradle.jvmargs='-Xmx3g -XX:+UseParallelGC'"
       android_signing:
-        - keystore_reference: "VerumKeystore"
+        - keystore: "$CM_KEYSTORE"
+          keystore_password: "$CM_KEYSTORE_PASSWORD"
+          key_alias: "$CM_KEY_ALIAS"
+          key_password: "$CM_KEY_PASSWORD"
 
     cache:
       cache_paths:
@@ -22,24 +25,23 @@ workflows:
         - "node_modules"
 
     scripts:
-      - name: "Set up Node.js"
+      - name: "Set up Node"
         script: |
           source ~/.bashrc || true
           nvm install $NODE_VERSION
           nvm use $NODE_VERSION
-          node -v
-          npm -v
+          node -v && npm -v
 
-      - name: "Install dependencies"
+      - name: "Install deps"
         script: npm ci
 
-      - name: "Build web assets"
+      - name: "Build web"
         script: npm run build
 
-      - name: "Sync Capacitor Android"
+      - name: "Sync Capacitor"
         script: npx cap sync android
 
-      - name: "Force Java 17 in Gradle toolchain"
+      - name: "Force Java 17"
         script: |
           cat > android/gradle-java17.gradle <<'EOF'
           allprojects {
@@ -62,17 +64,15 @@ workflows:
           fi
           chmod +x android/gradlew
 
-      - name: "Build Release"
+      - name: "Build Release (AAB + APK)"
         script: |
           cd android
           ./gradlew --no-daemon clean bundleRelease assembleRelease
 
       - name: "List outputs"
         script: |
-          echo "APK files:"
-          find app/build/outputs -name "*.apk" -maxdepth 3
-          echo "AAB files:"
-          find app/build/outputs -name "*.aab" -maxdepth 3
+          echo "APK:" && find android/app/build/outputs -name "*.apk" -maxdepth 3 || true
+          echo "AAB:" && find android/app/build/outputs -name "*.aab" -maxdepth 3 || true
 
     artifacts:
       - "android/app/build/outputs/**/*.apk"
