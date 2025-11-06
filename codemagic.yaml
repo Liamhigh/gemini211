@@ -9,9 +9,8 @@ workflows:
         ANDROID_SDK_ROOT: /usr/local/share/android-sdk
         JAVA_VERSION: 17
         NODE_VERSION: 20
-      # change this to match the name of the keystore you added in Codemagic UI
       android_signing:
-        - MyPlayKeystore
+        - MyPlayKeystore   # use the keystore name you added in Codemagic UI
 
     cache:
       cache_paths:
@@ -32,16 +31,20 @@ workflows:
       - name: Install dependencies
         script: npm install
 
-      - name: Build web & sync Capacitor (safe to skip if not used)
+      - name: Build web (optional)
         script: |
-          npm run build || echo "no web build"
-          npx cap sync android || echo "no capacitor"
+          npm run build || echo "No web build"
+          npx cap sync android || echo "No capacitor"
 
-      - name: Create Java 17 override (Gradle init script, no Kotlin imports)
+      - name: Create Java-17 enforcement script
         script: |
-          cat > java17.init.gradle <<'GROOVY'
+          cat > java17.init.gradle <<'EOF'
           allprojects { proj ->
-            // Force Android modules to Java 17
+            tasks.withType(JavaCompile).configureEach {
+              sourceCompatibility = JavaVersion.VERSION_17
+              targetCompatibility = JavaVersion.VERSION_17
+              options.release = 17
+            }
             ['com.android.application','com.android.library','com.android.test'].each { pid ->
               proj.plugins.withId(pid) {
                 def android = proj.extensions.findByName('android')
@@ -50,23 +53,21 @@ workflows:
                     sourceCompatibility = JavaVersion.VERSION_17
                     targetCompatibility = JavaVersion.VERSION_17
                   }
+                  if (android.hasProperty('kotlinOptions')) {
+                    android.kotlinOptions.jvmTarget = '17'
+                  }
                 }
               }
             }
-            // Fallback for any plain JavaCompile tasks
-            tasks.withType(JavaCompile).configureEach {
-              sourceCompatibility = JavaVersion.VERSION_17
-              targetCompatibility = JavaVersion.VERSION_17
-            }
           }
-          GROOVY
+          EOF
 
       - name: Build Release (APK + AAB)
         script: |
           cd android
           chmod +x gradlew || true
-          ./gradlew --no-daemon -I ../java17.init.gradle clean \
-            assembleRelease bundleRelease
+          ./gradlew --no-daemon -I ../java17.init.gradle \
+            clean assembleRelease bundleRelease
 
       - name: List outputs
         script: |
