@@ -8,35 +8,62 @@ workflows:
       - name: Build & package Android
         script: |
           set -euo pipefail
+
           echo "== 0) Dummy signing =="
           mkdir -p android
           keytool -genkey -v -keystore android/verum-dummy.jks -storepass Verum123! -keypass Verum123! \
             -alias verum -keyalg RSA -keysize 2048 -validity 10000 \
             -dname "CN=Verum, OU=Omnis, O=Foundation, L=Global, ST=World, C=AI"
 
-          echo "== 1) Install deps =="
+          echo "== 1) Node deps =="
           npm ci --legacy-peer-deps || npm install --legacy-peer-deps
+          npm i @capacitor/core @capacitor/cli @capacitor/android --legacy-peer-deps
 
-          echo "== 2) Install Capacitor Android =="
-          npm install @capacitor/core @capacitor/cli @capacitor/android --legacy-peer-deps
-
-          echo "== 3) Build web app =="
+          echo "== 2) Build web =="
           npm run build || npx vite build || true
           rm -rf www
-          [ -d dist ] && cp -r dist www || mkdir -p www && echo '<h1>Verum</h1>' > www/index.html
+          [ -d dist ] && cp -r dist www || { mkdir -p www; echo '<h1>Verum</h1>' > www/index.html; }
           echo '{"webDir":"www"}' > capacitor.config.json
+          echo "cap config:"
+          cat capacitor.config.json
 
-          echo "== 4) Capacitor sync =="
+          echo "== 3) Capacitor sync =="
           npx cap add android || echo "android already added"
           npx cap sync android
 
-          echo "== 5) Build APK =="
+          echo "== 4) Ensure Gradle wrapper & build =="
+          [ -d android ] || { echo "ERROR: android/ folder missing after cap sync"; ls -la; exit 1; }
           cd android
-          chmod +x gradlew || true
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          echo "Listing android dir:"
+          ls -la
+
+          # Try the wrapper; if missing, generate it with any Gradle we can find
+          if [ ! -f gradlew ]; then
+            echo "gradlew not found, trying to generate wrapper…"
+            if command -v gradle >/dev/null 2>&1; then
+              gradle wrapper || true
+            fi
+            # Some images keep Gradle under /opt/gradle
+            if [ ! -f gradlew ] && ls /opt/gradle >/dev/null 2>&1; then
+              /opt/gradle/*/bin/gradle wrapper || true
+            fi
+          fi
+
+          if [ ! -f gradlew ]; then
+            echo "FATAL: still no gradlew after attempts."
+            echo "Tree of android/:"
+            find . -maxdepth 3 -type f | sed 's#^\./##'
+            exit 127
+          fi
+
+          chmod +x gradlew
+          ./gradlew --version || true
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace --info
+
+          echo "== 5) Collect artifacts =="
           mkdir -p ../build_output
           find app/build/outputs -name "*.apk" -exec cp {} ../build_output/ \;
-          ls -lh ../build_output
+          ls -lh ../build_output || true
 
     artifacts:
       - build_output/**/*.apk
