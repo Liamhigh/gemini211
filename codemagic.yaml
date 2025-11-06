@@ -6,9 +6,10 @@ workflows:
 
     environment:
       vars:
+        # Codemagic Linux images use this SDK path
+        ANDROID_SDK_ROOT: "/usr/local/share/android-sdk"
         JAVA_VERSION: 17
         NODE_VERSION: 20
-        ANDROID_SDK_ROOT: "/opt/android-sdk-linux"
 
     cache:
       cache_paths:
@@ -29,39 +30,49 @@ workflows:
       - name: "Install dependencies"
         script: npm install
 
-      - name: "Sync Capacitor (optional)"
-        script: npx cap sync android || echo "No Capacitor project — continuing"
-
-      - name: "Force Java 17 by patching Gradle files (no heredocs)"
+      - name: "Ensure Android platform exists"
         script: |
-          # Find probable android dir (root or one level down)
           ANDROID_DIR=$(find . -maxdepth 2 -type d -name android | head -n1 || true)
           if [ -z "$ANDROID_DIR" ]; then
-            echo "⚠️  No android/ directory found. Skipping Java patch."
-          else
-            echo "Android directory: $ANDROID_DIR"
-            FILES=$(git ls-files "$ANDROID_DIR/**/build.gradle" "$ANDROID_DIR/**/build.gradle.kts" 2>/dev/null || true)
-            if [ -z "$FILES" ]; then
-              echo "No Gradle build files to patch."
-            else
-              echo "$FILES" | xargs -r sed -i -E \
-                -e 's/JavaVersion\.VERSION_21/JavaVersion.VERSION_17/g' \
-                -e 's/JavaLanguageVersion\.of\(21\)/JavaLanguageVersion.of(17)/g' \
-                -e 's/\brelease\s*=\s*21\b/release = 17/g' \
-                -e 's/jvmTarget\s*=\s*["'\'']21["'\'']/jvmTarget = "17"/g'
+            echo "No android/ folder; trying Capacitor..."
+            if npx cap --version >/dev/null 2>&1; then
+              npx cap add android || true
+              npx cap sync android || true
+              ANDROID_DIR=$(find . -maxdepth 2 -type d -name android | head -n1 || true)
             fi
-            chmod +x "$ANDROID_DIR/gradlew" 2>/dev/null || true
           fi
+          if [ -z "$ANDROID_DIR" ]; then
+            echo "❌ No android project found to build."; exit 1
+          fi
+          echo "Android directory: $ANDROID_DIR"
+
+      - name: "Create Java 17 override (Gradle init script)"
+        script: |
+          cat > java17.init.gradle <<'GROOVY'
+          import org.gradle.api.tasks.compile.JavaCompile
+
+          allprojects {
+            tasks.withType(JavaCompile).configureEach { jc ->
+              sourceCompatibility = JavaVersion.VERSION_17
+              targetCompatibility = JavaVersion.VERSION_17
+              if (jc.options.hasProperty('release')) {
+                jc.options.release = 17
+              }
+            }
+            tasks.matching { it.name.toLowerCase().contains('kotlin') }.configureEach { t ->
+              if (t.hasProperty('kotlinOptions')) {
+                t.kotlinOptions.jvmTarget = '17'
+              }
+            }
+          }
+          GROOVY
 
       - name: "Build APK (debug)"
         script: |
-          ANDROID_DIR=$(find . -maxdepth 2 -type d -name android | head -n1 || true)
-          if [ -n "$ANDROID_DIR" ]; then
-            cd "$ANDROID_DIR"
-            ./gradlew --no-daemon clean assembleDebug
-          else
-            echo "❌ No android project found to build." && exit 1
-          fi
+          ANDROID_DIR=$(find . -maxdepth 2 -type d -name android | head -n1)
+          cd "$ANDROID_DIR"
+          chmod +x gradlew || true
+          ./gradlew --no-daemon -I ../java17.init.gradle clean assembleDebug
 
       - name: "List outputs"
         script: |
