@@ -1,26 +1,30 @@
-workflows: android_release: name: Verum Omnis — Android Release instance_type: linux_x2 max_build_duration: 60
+workflows:
+  android_release:
+    name: Verum Omnis — Android Release
+    instance_type: linux_x2
+    max_build_duration: 60
 
-scripts:
-  - name: Add Android (Capacitor) & sync
-    script: |
-      set -e
-      echo "Repo root:"
-      ls -la
+    scripts:
+      - name: Add Android (Capacitor) & sync
+        script: |
+          set -e
+          echo "Repo root:"
+          ls -la
 
-      # Make sure Capacitor deps exist (no-op if already present)
-      node -e "require.resolve('@capacitor/cli')" 2>/dev/null || npm i -D @capacitor/cli
-      node -e "require.resolve('@capacitor/android')" 2>/dev/null || npm i @capacitor/android
+          # Make sure Capacitor deps exist (no-op if already present)
+          node -e "require.resolve('@capacitor/cli')" 2>/dev/null || npm i -D @capacitor/cli
+          node -e "require.resolve('@capacitor/android')" 2>/dev/null || npm i @capacitor/android
 
-      # Initialize android platform on fresh CI clones
-      if [ ! -d android ]; then
-        echo "No android/ folder found. Adding platform…"
-        npx cap add android
-      else
-        echo "android/ folder exists."
-      fi
+          # Initialize android platform on fresh CI clones
+          if [ ! -d android ]; then
+            echo "No android/ folder found. Adding platform…"
+            npx cap add android
+          else
+            echo "android/ folder exists."
+          fi
 
-      # Always sync web assets + plugins
-      npx cap sync android
+          # Always sync web assets + plugins
+          npx cap sync android
 
-      # Show a quick tree for sanity
-      ls -la android/app/src/main/assets || true
+          # Show a quick tree for sanity
+          ls -la android/app/src/main/assets || true
