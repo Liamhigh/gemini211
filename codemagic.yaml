@@ -1,4 +1,10 @@
-- name: Add Android (Capacitor) & sync
+workflows:
+  build_android:
+    name: Verum Omnis Android Build
+    instance_type: linux_x2
+    max_build_duration: 60
+    scripts:
+      - name: Add Android (Capacitor) & sync
         script: |
           set -e
           echo "Preparing Node environment"
