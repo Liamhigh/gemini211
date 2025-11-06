@@ -63,9 +63,9 @@ workflows:
           if [ -n "${CM_KEYSTORE_BASE64:-}" ]; then
             echo "$CM_KEYSTORE_BASE64" | base64 -d > android/app/keystore.jks
             cat > android/key.properties <<'EOF'
-storePassword=$CM_KEYSTORE_PASSWORD
-keyPassword=$CM_KEY_PASSWORD
-keyAlias=$CM_KEY_ALIAS
+storePassword=$CM_Ashbash78
+keyPassword=$CM_Ashbash78
+keyAlias=$CM_verumomnis
 storeFile=keystore.jks
 EOF
             echo "[OK] key.properties created."
