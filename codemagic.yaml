@@ -1,68 +1,23 @@
-workflows:
-  android_release:
-    name: Verum Omnis — Fast APK
-    instance_type: linux_x2
-    max_build_duration: 45
+echo "== 2) Build web =="
+npm run build || npx vite build || true
+rm -rf www
+[ -d dist ] && cp -r dist www || { mkdir -p www; echo '<h1>Verum</h1>' > www/index.html; }
 
-    scripts:
-      - name: Build & package Android
-        script: |
-          set -euo pipefail
+echo "== 3) Create capacitor.config.json =="
+cat > capacitor.config.json <<'EOF'
+{
+  "appId": "foundation.verum.global",
+  "appName": "Verum Omnis",
+  "webDir": "www",
+  "bundledWebRuntime": false
+}
+EOF
+cat capacitor.config.json
 
-          echo "== 1) Node deps =="
-          npm ci --legacy-peer-deps || npm install --legacy-peer-deps
-          npm i -D @capacitor/cli @capacitor/core @capacitor/android --legacy-peer-deps
-
-          echo "== 2) Build web =="
-          npm run build || npx vite build || true
-          rm -rf www
-          [ -d dist ] && cp -r dist www || { mkdir -p www; echo '<h1>Verum</h1>' > www/index.html; }
-          printf '{"webDir":"www"}\n' > capacitor.config.json
-
-          echo "== 3) Create/repair native Android project =="
-          # If android/ exists but isn't a proper Gradle project, remove it
-          if [ -d android ] && [ ! -f android/settings.gradle ] && [ ! -f android/settings.gradle.kts ]; then
-            echo "Found non-Gradle android/ directory. Removing it so Capacitor can recreate…"
-            rm -rf android
-          fi
-          npx cap add android || echo "android already added"
-          npx cap sync android
-
-          # Sanity check: we must now have a Gradle project
-          test -f android/settings.gradle -o -f android/settings.gradle.kts
-
-          echo "== 4) Dummy signing (after android/ exists) =="
-          keytool -genkey -v \
-            -keystore android/app/verum-dummy.jks \
-            -storepass Verum123! -keypass Verum123! \
-            -alias verum -keyalg RSA -keysize 2048 -validity 10000 \
-            -dname "CN=Verum, OU=Omnis, O=Foundation, L=Global, ST=World, C=AI"
-
-          echo "== 5) Build APK =="
-          cd android
-          chmod +x gradlew || true
-          if [ ! -f gradlew ]; then
-            echo "gradlew missing — generating wrapper with system Gradle (or fail gracefully)…"
-            if command -v gradle >/dev/null 2>&1; then
-              gradle wrapper || true
-            fi
-          fi
-          if [ ! -f gradlew ]; then
-            echo "Downloading Gradle 8.7 to generate wrapper…"
-            cd /tmp
-            curl -L -o gradle.zip https://services.gradle.org/distributions/gradle-8.7-bin.zip
-            unzip -q gradle.zip
-            cd - >/dev/null
-            /tmp/gradle-8.7/bin/gradle wrapper || true
-          fi
-          test -f gradlew
-
-          ./gradlew --no-daemon :app:assembleDebug --stacktrace --info
-
-          echo "== 6) Collect artifacts =="
-          mkdir -p ../build_output
-          find app/build/outputs -name "*.apk" -exec cp {} ../build_output/ \;
-          ls -lh ../build_output
-
-    artifacts:
-      - build_output/**/*.apk
+echo "== 4) Create/repair native Android project =="
+if [ -d android ] && [ ! -f android/settings.gradle ]; then
+  echo "Removing empty android folder..."
+  rm -rf android
+fi
+npx cap add android || echo "android already added"
+npx cap sync android
