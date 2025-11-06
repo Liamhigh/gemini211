@@ -16,7 +16,7 @@ workflows:
         - "~/.gradle/caches"
         - "~/.gradle/wrapper"
         - "~/.npm"
-        - "android/.gradle"
+        - "**/android/.gradle"
         - "node_modules"
 
     scripts:
@@ -31,51 +31,58 @@ workflows:
         script: npm install
 
       - name: "Build web assets"
-        script: npm run build || echo "No web build script found"
+        script: npm run build || echo "No web build step — continuing"
 
       - name: "Sync Capacitor (Android)"
-        script: npx cap sync android || echo "Capacitor not detected, continuing..."
+        script: npx cap sync android || echo "No Capacitor project — continuing"
 
-      - name: "Force Java 17"
+      - name: "Force Java 17 (if Android folder exists)"
         script: |
-          cat > android/gradle-java17.gradle <<'EOF'
-          allprojects {
-            tasks.withType(JavaCompile).configureEach {
-              sourceCompatibility = JavaVersion.VERSION_17
-              targetCompatibility = JavaVersion.VERSION_17
-              if (options.hasProperty("release")) options.release = 17
-            }
-          }
-          subprojects {
-            plugins.withId("org.jetbrains.kotlin.android") {
-              tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
-                kotlinOptions { jvmTarget = "17" }
+          ANDROID_DIR=$(find . -type d -name "android" -maxdepth 2 | head -n1)
+          if [ -d "$ANDROID_DIR" ]; then
+            echo "Detected Android directory: $ANDROID_DIR"
+            cat > "$ANDROID_DIR/gradle-java17.gradle" <<'EOF'
+            allprojects {
+              tasks.withType(JavaCompile).configureEach {
+                sourceCompatibility = JavaVersion.VERSION_17
+                targetCompatibility = JavaVersion.VERSION_17
+                if (options.hasProperty("release")) options.release = 17
               }
             }
-          }
-          EOF
-          if ! grep -q "apply from: 'gradle-java17.gradle'" android/build.gradle; then
-            sed -i "1i apply from: 'gradle-java17.gradle'" android/build.gradle
+            subprojects {
+              plugins.withId("org.jetbrains.kotlin.android") {
+                tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+                  kotlinOptions { jvmTarget = "17" }
+                }
+              }
+            }
+            EOF
+            if ! grep -q "apply from: 'gradle-java17.gradle'" "$ANDROID_DIR/build.gradle"; then
+              sed -i "1i apply from: 'gradle-java17.gradle'" "$ANDROID_DIR/build.gradle"
+            fi
+            chmod +x "$ANDROID_DIR/gradlew" || true
+          else
+            echo "⚠️ No android folder detected — skipping Java17 patch"
           fi
-          chmod +x android/gradlew
 
-      - name: "Build unsigned APK/AAB"
+      - name: "Build APK"
         script: |
-          cd android
-          ./gradlew --no-daemon clean assembleDebug
-          cd ..
+          ANDROID_DIR=$(find . -type d -name "android" -maxdepth 2 | head -n1)
+          if [ -d "$ANDROID_DIR" ]; then
+            cd "$ANDROID_DIR"
+            ./gradlew --no-daemon clean assembleDebug
+          else
+            echo "⚠️ No android project found to build"
+          fi
 
       - name: "List build outputs"
         script: |
-          echo "APK files found:"
-          find android/app/build/outputs -name "*.apk" -maxdepth 3 || true
-          echo "AAB files found:"
-          find android/app/build/outputs -name "*.aab" -maxdepth 3 || true
+          find . -type f \( -name "*.apk" -o -name "*.aab" \) -print || true
 
     artifacts:
-      - "android/app/build/outputs/**/*.apk"
-      - "android/app/build/outputs/**/*.aab"
-      - "android/build/reports/**"
+      - "**/build/outputs/**/*.apk"
+      - "**/build/outputs/**/*.aab"
+      - "**/build/reports/**"
 
     publishing:
       email:
