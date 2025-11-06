@@ -1,67 +1,108 @@
-# codemagic.yaml (root of repo)
 workflows:
   android_release:
     name: Verum Omnis — Android Release
-    instance_type: linux_x2           # fast Linux VM for Android
+    instance_type: linux_x2
     max_build_duration: 60
 
     environment:
-      # Your Android package must match google-services.json
+      # No groups. Reads app-level variables only.
+      # REQUIRED app-level vars:
+      #   CM_KEYSTORE            -> base64 of verumomnis-release-key.jks
+      #   CM_KEYSTORE_PASSWORD   -> e.g. Verum123!
+      # OPTIONAL app-level vars:
+      #   CM_KEY_ALIAS           -> defaults to "verumomnis"
+      #   CM_KEY_PASSWORD        -> defaults to CM_KEYSTORE_PASSWORD
+      #   GOOGLE_SERVICES_JSON_B64 -> base64 of android/app/google-services.json
       vars:
-        PACKAGE_NAME: com.example.verumomnislegalassistant
-      # These groups must exist in Codemagic → Environment variables
-      groups:
-        - keystore    # CM_KEYSTORE, CM_KEYSTORE_PASSWORD, CM_KEY_ALIAS, CM_KEY_PASSWORD
-        - firebase    # GOOGLE_SERVICES_JSON_B64  (service account optional)
+        PACKAGE_NAME: "com.example.verumomnislegalassistant"
+        WEB_DIR: "dist"
+        JAVA_VERSION: "17"
 
     scripts:
-      - name: Install deps
-        script: npm ci
+      - name: Install deps & build web
+        script: |
+          node -v
+          npm ci || npm install
+          npm run build || npx vite build
 
-      - name: Build web assets
-        script: npm run build || npx vite build
-
-      - name: Prepare Android & Capacitor
+      - name: Add Android (Capacitor) & sync
         script: |
           npx cap sync android
-          cd android
-          # decode signing keystore
-          echo "$CM_KEYSTORE" | base64 --decode > verum-release.jks
-          cat >> gradle.properties <<EOF
+
+      - name: Put google-services.json (if provided)
+        script: |
+          if [ -n "$GOOGLE_SERVICES_JSON_B64" ]; then
+            echo "$GOOGLE_SERVICES_JSON_B64" | base64 -d > android/app/google-services.json
+            echo "google-services.json written."
+          else
+            echo "GOOGLE_SERVICES_JSON_B64 not set; continuing without it."
+          fi
+
+      - name: Provision signing keystore from env
+        script: |
+          set -e
+          mkdir -p android
+          echo "$CM_KEYSTORE" | base64 -d > android/verum-release.jks
+
+          # Defaults if you don't set CM_KEY_ALIAS / CM_KEY_PASSWORD
+          KEY_ALIAS="${CM_KEY_ALIAS:-verumomnis}"
+          KEY_PASS="${CM_KEY_PASSWORD:-$CM_KEYSTORE_PASSWORD}"
+
+          cat >> android/gradle.properties <<EOF
           VOM_KEYSTORE=verum-release.jks
-          VOM_KEYSTORE_PASSWORD=$CM_KEYSTORE_PASSWORD
-          VOM_KEY_ALIAS=$CM_KEY_ALIAS
-          VOM_KEY_PASSWORD=$CM_KEY_PASSWORD
+          VOM_KEYSTORE_PASSWORD=${CM_KEYSTORE_PASSWORD}
+          VOM_KEY_ALIAS=${KEY_ALIAS}
+          VOM_KEY_PASSWORD=${KEY_PASS}
           EOF
-          # inject google-services.json
-          cd app
-          echo "$GOOGLE_SERVICES_JSON_B64" | base64 --decode > google-services.json
-          cd ..
+
+          # Ensure release signingConfig exists and is used
+          sed -i 's/applicationId "[^"]\+"/applicationId "'"$PACKAGE_NAME"'"/' android/app/build.gradle || true
+          if ! grep -q "signingConfigs {.*release" -z android/app/build.gradle; then
+            awk '
+              /buildTypes {/ && !p {
+                print; print "        signingConfigs {"
+                print "            release {"
+                print "                storeFile file(VOM_KEYSTORE)"
+                print "                storePassword VOM_KEYSTORE_PASSWORD"
+                print "                keyAlias VOM_KEY_ALIAS"
+                print "                keyPassword VOM_KEY_PASSWORD"
+                print "            }"
+                print "        }"
+                p=1; next
+              }1
+            ' android/app/build.gradle > android/app/build.gradle.tmp && mv android/app/build.gradle.tmp android/app/build.gradle
+          fi
+          sed -i 's/signingConfig signingConfigs.debug/signingConfig signingConfigs.release/' android/app/build.gradle || true
 
       - name: Build APK & AAB
         script: |
           cd android
-          ./gradlew clean :app:assembleRelease :app:bundleRelease
+          ./gradlew --no-daemon -Pandroid.useAndroidX=true -Porg.gradle.jvmargs="-Xmx3g" \
+            clean :app:assembleRelease :app:bundleRelease
 
       - name: Compute SHA-512 & QR metadata
         script: |
-          # each script starts at repo root; APK path is from root:
           APK=android/app/build/outputs/apk/release/app-release.apk
-          SHA=$(sha512sum "$APK" | awk '{print $1}')
-          echo "$SHA" > "${APK}.sha512"
-          NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          cat > "${APK}.qr.json" <<EOF
-          {
-            "created_at": "$NOW",
-            "file_count": 1,
-            "hash": "$SHA",
-            "config_version": "5.2.0"
-          }
-          EOF
+          if [ -f "$APK" ]; then
+            SHA=$(sha512sum "$APK" | awk '{print $1}')
+            echo "$SHA" > "${APK}.sha512"
+            NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+            cat > "${APK}.qr.json" <<EOF
+            {
+              "created_at": "$NOW",
+              "file_count": 1,
+              "hash": "$SHA",
+              "config_version": "5.2.0"
+            }
+            EOF
+            echo "APK SHA-512: $SHA"
+          else
+            echo "APK not found, skipping SHA/QR step."
+          fi
 
     artifacts:
       - android/app/build/outputs/**/*.apk
       - android/app/build/outputs/**/*.aab
       - android/app/build/outputs/**/*.mapping.txt
-      - android/app/build/outputs/apk/release/app-release.apk.sha512
-      - android/app/build/outputs/apk/release/app-release.apk.qr.json
+      - android/app/build/outputs/**/*.sha512
+      - android/app/build/outputs/**/*.qr.json
