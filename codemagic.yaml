@@ -8,40 +8,34 @@ workflows:
       - name: Build & package Android
         script: |
           set -euo pipefail
-
           echo "== 0) Dummy signing =="
           mkdir -p android
           keytool -genkey -v -keystore android/verum-dummy.jks -storepass Verum123! -keypass Verum123! \
             -alias verum -keyalg RSA -keysize 2048 -validity 10000 \
             -dname "CN=Verum, OU=Omnis, O=Foundation, L=Global, ST=World, C=AI"
 
-          echo "== 1) Install dependencies & build web =="
+          echo "== 1) Install deps =="
           npm ci --legacy-peer-deps || npm install --legacy-peer-deps
-          npm run build || npx vite build || true
 
-          echo "== 2) Prepare www folder =="
+          echo "== 2) Install Capacitor Android =="
+          npm install @capacitor/core @capacitor/cli @capacitor/android --legacy-peer-deps
+
+          echo "== 3) Build web app =="
+          npm run build || npx vite build || true
           rm -rf www
           [ -d dist ] && cp -r dist www || mkdir -p www && echo '<h1>Verum</h1>' > www/index.html
-
-          echo "== 3) Ensure capacitor config webDir = 'www' =="
           echo '{"webDir":"www"}' > capacitor.config.json
 
           echo "== 4) Capacitor sync =="
-          npm i -g @capacitor/cli
-          npx cap add android || echo "android already exists"
+          npx cap add android || echo "android already added"
           npx cap sync android
 
           echo "== 5) Build APK =="
           cd android
           chmod +x gradlew || true
           ./gradlew assembleDebug --no-daemon --stacktrace
-          ls -lh app/build/outputs/apk/debug || true
-
-          echo "== 6) Copy artifact =="
           mkdir -p ../build_output
           find app/build/outputs -name "*.apk" -exec cp {} ../build_output/ \;
-
-          echo "== 7) Done. APK copied to build_output =="
           ls -lh ../build_output
 
     artifacts:
