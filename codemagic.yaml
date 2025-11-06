@@ -1,39 +1,80 @@
-- name: Create Java 17 override (Gradle init script)
-  script: |
-    cat > java17.init.gradle <<'GROOVY'
-    import org.gradle.api.tasks.compile.JavaCompile
-    import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+workflows:
+  build_android_debug:
+    name: Build Android Debug APK
+    instance_type: linux_x2
+    max_build_duration: 45
 
-    allprojects { proj ->
-      // Use Java 17 toolchain wherever possible
-      proj.plugins.withId('java') {
-        proj.extensions.getByType(JavaPluginExtension).toolchain {
-          languageVersion = JavaLanguageVersion.of(17)
-        }
-      }
+    environment:
+      vars:
+        ANDROID_SDK_ROOT: /usr/local/share/android-sdk
+        JAVA_VERSION: 17
+        NODE_VERSION: 20
 
-      // Android plugins: set compileOptions 17
-      ['com.android.application','com.android.library','com.android.test'].each { pid ->
-        proj.plugins.withId(pid) {
-          def android = proj.extensions.findByName('android')
-          if (android != null) {
-            android.compileOptions {
+    scripts:
+      - name: Setup Node
+        script: |
+          nvm install $NODE_VERSION
+          nvm use $NODE_VERSION
+          npm ci
+
+      - name: Sync Capacitor
+        script: |
+          npx cap sync android || true
+
+      - name: Create Java 17 override (Gradle init script)
+        script: |
+          cat > java17.init.gradle <<'GROOVY'
+          import org.gradle.api.tasks.compile.JavaCompile
+          import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+
+          allprojects { proj ->
+            // Java toolchain for 17
+            proj.plugins.withId('java') {
+              proj.extensions.getByType(JavaPluginExtension).toolchain {
+                languageVersion = JavaLanguageVersion.of(17)
+              }
+            }
+
+            // Android compileOptions
+            ['com.android.application','com.android.library','com.android.test'].each { pid ->
+              proj.plugins.withId(pid) {
+                def android = proj.extensions.findByName('android')
+                if (android != null) {
+                  android.compileOptions {
+                    sourceCompatibility = JavaVersion.VERSION_17
+                    targetCompatibility = JavaVersion.VERSION_17
+                  }
+                }
+              }
+            }
+
+            // Plain JavaCompile tasks
+            proj.tasks.withType(JavaCompile).configureEach {
               sourceCompatibility = JavaVersion.VERSION_17
               targetCompatibility = JavaVersion.VERSION_17
             }
+
+            // Kotlin jvmTarget
+            proj.tasks.withType(KotlinCompile).configureEach {
+              kotlinOptions.jvmTarget = '17'
+            }
           }
-        }
-      }
+          GROOVY
 
-      // Fallback for plain JavaCompile tasks (NO options.release here)
-      proj.tasks.withType(JavaCompile).configureEach {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-      }
+      - name: Build APK (debug)
+        script: |
+          cd android
+          chmod +x gradlew || true
+          ./gradlew --no-daemon -I ../java17.init.gradle clean assembleDebug
 
-      // Kotlin to 17
-      proj.tasks.withType(KotlinCompile).configureEach {
-        kotlinOptions.jvmTarget = '17'
-      }
-    }
-    GROOVY
+    artifacts:
+      - android/app/build/outputs/**/*.apk
+      - android/build/outputs/**/*.apk
+
+    publishing:
+      email:
+        recipients:
+          - liam@verumglobal.foundation
+        notify:
+          success: true
+          failure: true
