@@ -16,6 +16,7 @@ workflows:
         - "~/.gradle/wrapper"
         - "~/.npm"
         - "node_modules"
+        - "**/android/.gradle"
 
     scripts:
       - name: "Set up Node.js"
@@ -28,50 +29,48 @@ workflows:
       - name: "Install dependencies"
         script: npm install
 
-      - name: "Force Java 17 (safe mode)"
-        script: |
-          ANDROID_DIR=$(find . -type d -name "android" -maxdepth 2 | head -n1)
-          if [ -d "$ANDROID_DIR" ]; then
-            echo "Detected Android directory: $ANDROID_DIR"
-            printf '%s\n' \
-'allprojects {' \
-'  tasks.withType(JavaCompile).configureEach {' \
-'    sourceCompatibility = JavaVersion.VERSION_17' \
-'    targetCompatibility = JavaVersion.VERSION_17' \
-'    if (options.hasProperty("release")) options.release = 17' \
-'  }' \
-'}' \
-'subprojects {' \
-'  plugins.withId("org.jetbrains.kotlin.android") {' \
-'    tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {' \
-'      kotlinOptions { jvmTarget = "17" }' \
-'    }' \
-'  }' \
-'}' > "$ANDROID_DIR/gradle-java17.gradle"
+      - name: "Sync Capacitor (optional)"
+        script: npx cap sync android || echo "No Capacitor project — continuing"
 
-            if ! grep -q "apply from: 'gradle-java17.gradle'" "$ANDROID_DIR/build.gradle"; then
-              sed -i "1i apply from: 'gradle-java17.gradle'" "$ANDROID_DIR/build.gradle"
-            fi
+      - name: "Force Java 17 by patching Gradle files (no heredocs)"
+        script: |
+          # Find probable android dir (root or one level down)
+          ANDROID_DIR=$(find . -maxdepth 2 -type d -name android | head -n1 || true)
+          if [ -z "$ANDROID_DIR" ]; then
+            echo "⚠️  No android/ directory found. Skipping Java patch."
           else
-            echo "⚠️  No android folder detected — skipping Java17 patch"
+            echo "Android directory: $ANDROID_DIR"
+            FILES=$(git ls-files "$ANDROID_DIR/**/build.gradle" "$ANDROID_DIR/**/build.gradle.kts" 2>/dev/null || true)
+            if [ -z "$FILES" ]; then
+              echo "No Gradle build files to patch."
+            else
+              echo "$FILES" | xargs -r sed -i -E \
+                -e 's/JavaVersion\.VERSION_21/JavaVersion.VERSION_17/g' \
+                -e 's/JavaLanguageVersion\.of\(21\)/JavaLanguageVersion.of(17)/g' \
+                -e 's/\brelease\s*=\s*21\b/release = 17/g' \
+                -e 's/jvmTarget\s*=\s*["'\'']21["'\'']/jvmTarget = "17"/g'
+            fi
+            chmod +x "$ANDROID_DIR/gradlew" 2>/dev/null || true
           fi
 
-      - name: "Build APK"
+      - name: "Build APK (debug)"
         script: |
-          ANDROID_DIR=$(find . -type d -name "android" -maxdepth 2 | head -n1)
-          if [ -d "$ANDROID_DIR" ]; then
+          ANDROID_DIR=$(find . -maxdepth 2 -type d -name android | head -n1 || true)
+          if [ -n "$ANDROID_DIR" ]; then
             cd "$ANDROID_DIR"
             ./gradlew --no-daemon clean assembleDebug
           else
-            echo "⚠️  No android project found to build"
+            echo "❌ No android project found to build." && exit 1
           fi
 
-      - name: "List build outputs"
-        script: find . -type f \( -name "*.apk" -o -name "*.aab" \) -print || true
+      - name: "List outputs"
+        script: |
+          find . -type f \( -name "*.apk" -o -name "*.aab" \) -print || true
 
     artifacts:
       - "**/build/outputs/**/*.apk"
       - "**/build/outputs/**/*.aab"
+      - "**/build/reports/**"
 
     publishing:
       email:
