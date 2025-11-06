@@ -1,150 +1,126 @@
 workflows:
   android_release:
     name: Verum Omnis — Android Release
-    max_build_duration: 60
     instance_type: linux_x2
+    max_build_duration: 60
 
     environment:
-      # Node set close to your local; Codemagic images already have Java 17 & Android SDK
-      node: v20.11.1
       vars:
-        APP_ID: com.example.verumomnislegalassistant
-        WEB_DIR: dist
+        # Required: provide these in Codemagic UI (App variables). Keep names exactly as below.
+        CM_KEYSTORE: $CM_KEYSTORE
+        CM_KEYSTORE_PASSWORD: $CM_KEYSTORE_PASSWORD
+        CM_KEY_ALIAS: $CM_KEY_ALIAS
+        CM_KEY_PASSWORD: $CM_KEY_PASSWORD
+        GOOGLE_SERVICES_JSON_B64: $GOOGLE_SERVICES_JSON_B64
+      node: v20.11.1
+      npm: 10.2.4
+
+    cache:
+      cache_paths:
+        - ~/.npm
+        - android/.gradle
+        - android/.gradle/caches
+        - android/.gradle/wrapper
 
     scripts:
       - name: Install deps & build web
         script: |
           set -e
-          echo "Installing npm dependencies…"
-          npm ci || npm install
-          echo "Building web assets…"
-          npm run build || npx vite build
+          echo "Node: $(node -v)  npm: $(npm -v)"
+          npm ci --legacy-peer-deps
+          # Build your web bundle (Vite or npm run build)
+          if npm run | grep -qE '^  build'; then
+            npm run build
+          else
+            npx vite build
+          fi
 
       - name: Add Android (Capacitor) & sync
         script: |
           set -e
-          echo "Adding Android platform (idempotent)…"
-          npx cap add android || true
-          echo "Syncing Capacitor…"
+          # Ensure Capacitor CLI exists on the runner
+          npm install -g @capacitor/cli
+          # Add platform once (idempotent)
+          if [ ! -d "android" ]; then
+            npx cap add android
+          fi
+          # Copy web to native & sync plugins
           npx cap sync android
 
-      - name: Ensure Google Services plugin & file
+      - name: Put google-services.json (if provided)
         script: |
           set -e
-          # 1) inject google-services.json when provided
           if [ -n "$GOOGLE_SERVICES_JSON_B64" ]; then
+            mkdir -p android/app
             echo "$GOOGLE_SERVICES_JSON_B64" | base64 --decode > android/app/google-services.json
-            ls -la android/app/google-services.json
+            echo "✅ Wrote android/app/google-services.json"
           else
-            echo "GOOGLE_SERVICES_JSON_B64 not set; skipping file injection."
+            echo "ℹ️ GOOGLE_SERVICES_JSON_B64 not set; skipping Firebase config"
           fi
 
-          # 2) add classpath in android/build.gradle if missing
-          if ! grep -q "com.google.gms:google-services" android/build.gradle; then
-            echo "Adding Google Services classpath to android/build.gradle…"
-            awk '
-              /dependencies\s*\{/ && !done { print; print "        classpath '\''com.google.gms:google-services:4.4.2'\''"; done=1; next }
-              { print }
-            ' android/build.gradle > android/build.gradle.tmp && mv android/build.gradle.tmp android/build.gradle
-          fi
-
-          # 3) apply plugin in app/build.gradle if missing
-          if ! grep -q "com.google.gms.google-services" android/app/build.gradle; then
-            echo "apply plugin: '\''com.google.gms.google-services'\''" >> android/app/build.gradle
-          fi
-
-      - name: Provision signing keystore from env
+      - name: Provision signing keystore
         script: |
           set -e
           if [ -n "$CM_KEYSTORE" ]; then
-            echo "Decoding keystore from env…"
             echo "$CM_KEYSTORE" | base64 --decode > android/verum-release.jks
-
-            echo "Writing signing props to android/gradle.properties…"
+            echo "✅ Decoded keystore to android/verum-release.jks"
+            # Inject signing props for Gradle
             cat >> android/gradle.properties <<EOF
-            VOM_KEYSTORE=verum-release.jks
-            VOM_KEYSTORE_PASSWORD=${CM_KEYSTORE_PASSWORD}
-            VOM_KEY_ALIAS=${CM_KEY_ALIAS}
-            VOM_KEY_PASSWORD=${CM_KEY_PASSWORD}
-            EOF
-
-            # Inject signing config in app/build.gradle if not present
-            if ! grep -q "signingConfigs\s*{\s*release" android/app/build.gradle; then
-              echo "Adding signingConfigs.release to app/build.gradle…"
-              awk '
-                /android\s*\{/ { print; inAndroid=1; next }
-                inAndroid && /signingConfigs\s*\{/ { hasSigning=1 }
-                { print }
-                END {
-                  if (inAndroid && !hasSigning) {
-                    print "    signingConfigs {"
-                    print "        release {"
-                    print "            storeFile file(\"../verum-release.jks\")"
-                    print "            storePassword System.getenv(\"CM_KEYSTORE_PASSWORD\") ?: \"${CM_KEYSTORE_PASSWORD}\""
-                    print "            keyAlias System.getenv(\"CM_KEY_ALIAS\") ?: \"${CM_KEY_ALIAS}\""
-                    print "            keyPassword System.getenv(\"CM_KEY_PASSWORD\") ?: \"${CM_KEY_PASSWORD}\""
-                    print "        }"
-                    print "    }"
-                  }
-                }
-              ' android/app/build.gradle > android/app/build.gradle.tmp && mv android/app/build.gradle.tmp android/app/build.gradle
-            fi
-
-            if ! grep -q "buildTypes\s*{\s*release\s*{" android/app/build.gradle || ! grep -q "signingConfig signingConfigs.release" android/app/build.gradle; then
-              echo "Ensuring buildTypes.release uses signingConfigs.release…"
-              awk '
-                /buildTypes\s*\{/ { inBT=1 }
-                inBT && /release\s*\{/ { inRel=1 }
-                { print }
-                inRel && /{/ && !printed {
-                  print "            signingConfig signingConfigs.release"
-                  printed=1
-                }
-              ' android/app/build.gradle > android/app/build.gradle.tmp && mv android/app/build.gradle.tmp android/app/build.gradle
-            fi
+VOM_KEYSTORE=verum-release.jks
+VOM_KEYSTORE_PASSWORD=${CM_KEYSTORE_PASSWORD}
+VOM_KEY_ALIAS=${CM_KEY_ALIAS}
+VOM_KEY_PASSWORD=${CM_KEY_PASSWORD}
+EOF
+            echo "✅ Appended signing props to android/gradle.properties"
           else
-            echo "CM_KEYSTORE not set; build will be unsigned."
+            echo "❌ CM_KEYSTORE is empty — cannot sign release"
+            exit 1
           fi
 
       - name: Build APK & AAB
         script: |
           set -e
           cd android
-          echo "Running Gradle release builds…"
           ./gradlew --no-daemon clean :app:assembleRelease :app:bundleRelease
 
       - name: Compute SHA-512 & QR metadata
         script: |
           set -e
-          APK=android/app/build/outputs/apk/release/app-release.apk
+          APK="android/app/build/outputs/apk/release/app-release.apk"
+          AAB="android/app/build/outputs/bundle/release/app-release.aab"
           if [ -f "$APK" ]; then
-            echo "Computing SHA-512 for $APK…"
             SHA=$(sha512sum "$APK" | awk '{print $1}')
             echo "$SHA" > "${APK}.sha512"
             NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
             cat > "${APK}.qr.json" <<EOF
-            {
-              "created_at": "$NOW",
-              "file_count": 1,
-              "hash": "$SHA",
-              "config_version": "5.2.0"
-            }
-            EOF
-            echo "APK SHA-512: $SHA"
+{
+  "created_at": "$NOW",
+  "file_count": 1,
+  "hash": "$SHA",
+  "config_version": "5.2.0"
+}
+EOF
+            echo "✅ SHA-512: $SHA"
           else
-            echo "APK not found at $APK"
+            echo "❌ APK not found at $APK"
             exit 1
+          fi
+          # Also checksum the AAB (optional but handy)
+          if [ -f "$AAB" ]; then
+            sha512sum "$AAB" | awk '{print $1}' > "${AAB}.sha512"
           fi
 
     artifacts:
-      - android/app/build/outputs/**/*.apk
-      - android/app/build/outputs/**/*.aab
+      - android/app/build/outputs/apk/release/app-release.apk
       - android/app/build/outputs/apk/release/app-release.apk.sha512
       - android/app/build/outputs/apk/release/app-release.apk.qr.json
+      - android/app/build/outputs/bundle/release/app-release.aab
+      - android/app/build/outputs/bundle/release/app-release.aab.sha512
 
     publishing:
-      scripts:
-        - name: Print artifact paths
-          script: |
-            echo "Artifacts under android/app/build/outputs:"
-            find android/app/build/outputs -type f -maxdepth 6 -print
+      email:
+        recipients:
+          - your.email@domain.com
+        notify:
+          success: true
+          failure: true
