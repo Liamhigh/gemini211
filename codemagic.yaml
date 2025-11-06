@@ -1,0 +1,151 @@
+workflows:
+  android_release:
+    name: Verum Omnis — Android Release (Capacitor)
+    max_build_duration: 60
+    instance_type: linux_x2
+
+    environment:
+      vars:
+        PACKAGE_NAME: "com.example.verumomnislegalassistant"   # your registered Firebase package
+        WEB_DIR: "dist"                                        # Vite build output
+        JAVA_VERSION: "17"
+      groups:
+        # Add these in Codemagic UI → Applications → (your app) → Environment variables
+        # Mark as secure wherever possible.
+        - android_signing        # CM_KEYSTORE_BASE64, CM_KEYSTORE_PASSWORD, CM_KEY_ALIAS, CM_KEY_PASSWORD
+        - firebase_config        # GOOGLE_SERVICES_JSON
+      cache:
+        cache_paths:
+          - ~/.gradle/caches
+          - ~/.gradle/wrapper
+          - $FCI_BUILD_DIR/node_modules
+          - $FCI_BUILD_DIR/android/.gradle
+          - $FCI_BUILD_DIR/android/app/build
+
+    triggering:
+      events:
+        - push
+        - manual
+      branch_patterns:
+        - pattern: "main"
+          include: true
+          source: true
+
+    scripts:
+      - name: Prepare toolchain
+        script: |
+          echo "Using Java $JAVA_VERSION"
+          sudo update-alternatives --set java /usr/lib/jvm/java-$JAVA_VERSION-openjdk-amd64/bin/java
+          java -version
+          node --version || true
+          npm --version || true
+          # Android SDK/licences are preinstalled on Codemagic images.
+
+      - name: Install JS deps & build web
+        script: |
+          npm ci || npm install
+          npm run build || npx vite build
+
+      - name: Capacitor Android project (create/sync)
+        script: |
+          # Initialize once (safe if already initialized)
+          npx cap init "Verum Omnis" "$PACKAGE_NAME" --web-dir="$WEB_DIR" --npm-client npm || true
+
+          # Add Android once (safe if already added)
+          npx cap add android || true
+
+          # Copy latest web build into native project
+          npx cap copy android
+          npx cap sync android
+
+      - name: Inject google-services.json (Firebase link only)
+        script: |
+          mkdir -p android/app
+          echo "$GOOGLE_SERVICES_JSON" > android/app/google-services.json
+          echo "[OK] google-services.json written to android/app/"
+
+      - name: Wire Google Services Gradle plugin (idempotent)
+        script: |
+          # project-level build.gradle
+          if ! grep -q "com.google.gms:google-services" android/build.gradle; then
+            sed -i "/dependencies[[:space:]]*{/a\        classpath 'com.google.gms:google-services:4.4.2'" android/build.gradle
+            echo "[EDIT] Added Google Services classpath to android/build.gradle"
+          fi
+          # module-level build.gradle
+          if ! grep -q "com.google.gms.google-services" android/app/build.gradle; then
+            printf "\napply plugin: 'com.google.gms.google-services'\n" >> android/app/build.gradle
+            echo "[EDIT] Applied google-services plugin to android/app/build.gradle"
+          fi
+          # minimal Firebase core (no analytics/telemetry)
+          if ! grep -q "firebase-bom" android/app/build.gradle; then
+            sed -i "/dependencies[[:space:]]*{/a\    implementation platform('com.google.firebase:firebase-bom:33.5.1')\n    implementation 'com.google.firebase:firebase-common-ktx'" android/app/build.gradle
+            echo "[EDIT] Added firebase-common only (no analytics)."
+          fi
+
+      - name: (Optional) Provide keystore for signing
+        script: |
+          if [ -n "${CM_KEYSTORE_BASE64:-}" ]; then
+            echo "$CM_KEYSTORE_BASE64" | base64 -d > android/app/keystore.jks
+            cat > android/key.properties <<EOF
+            storePassword=$CM_KEYSTORE_PASSWORD
+            keyPassword=$CM_KEY_PASSWORD
+            keyAlias=$CM_KEY_ALIAS
+            storeFile=keystore.jks
+EOF
+            echo "[OK] key.properties created."
+            # Ensure app build.gradle reads key.properties if not already wired
+            if ! grep -q "key.properties" android/app/build.gradle; then
+              sed -i "1s;^;def keystoreProperties = new Properties()\n\
+File keystorePropertiesFile = rootProject.file('key.properties')\n\
+if (keystorePropertiesFile.exists()) {\n\
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))\n\
+}\n\n;" android/app/build.gradle
+              echo "[EDIT] key.properties loader injected."
+            fi
+            if ! grep -q "signingConfigs" android/app/build.gradle; then
+              sed -i "/android[[:space:]]*{/a\    signingConfigs {\n        release {\n            if (keystoreProperties['storeFile']) {\n                storeFile file(keystoreProperties['storeFile'])\n                storePassword keystoreProperties['storePassword']\n                keyAlias keystoreProperties['keyAlias']\n                keyPassword keystoreProperties['keyPassword']\n            }\n        }\n    }\n" android/app/build.gradle
+              sed -i "s/buildTypes[[:space:]]*{/signingConfigs.release ? \"\" : \"\"/g" android/app/build.gradle || true
+            fi
+            # Ensure release uses signing config
+            if ! grep -q "signingConfig signingConfigs.release" android/app/build.gradle; then
+              sed -i "/buildTypes[[:space:]]*{/,/}/ s/release[[:space:]]*{/&\n            signingConfig signingConfigs.release/" android/app/build.gradle
+              echo "[EDIT] release buildType now uses signingConfigs.release."
+            fi
+          else
+            echo "[SKIP] No CM_KEYSTORE_BASE64 provided. Building unsigned release."
+          fi
+
+      - name: Build APK (release)
+        script: |
+          cd android
+          ./gradlew --no-daemon clean assembleRelease
+
+
+      - name: Generate checksums & QR
+        script: |
+          APK=$(find android/app/build/outputs/apk/release -type f -name "*release*.apk" | head -n1)
+          mkdir -p artifacts
+          cp "$APK" artifacts/app-release.apk
+          (cd artifacts && sha512sum app-release.apk | awk '{print $1}' > app-release.sha512)
+          (cd artifacts && sha256sum app-release.apk | awk '{print $1}' > app-release.sha256)
+          # simple QR payload (fill url later if you host elsewhere)
+          echo '{"url":"","sha512":"'"$(cat artifacts/app-release.sha512)"'"}' > artifacts/qr_payload.json
+          sudo apt-get update -y && sudo apt-get install -y qrencode
+          qrencode -o artifacts/app-release-qr.png "$(cat artifacts/qr_payload.json)"
+          echo "Artifacts:"
+          ls -la artifacts
+
+    artifacts:
+      - artifacts/app-release.apk
+      - artifacts/app-release.sha512
+      - artifacts/app-release.sha256
+      - artifacts/app-release-qr.png
+      - android/app/build/outputs/**/mapping.txt
+
+    publishing:
+      email:
+        recipients:
+          - "liam@verumglobal.foundation"
+        notify:
+          success: true
+          failure: true
