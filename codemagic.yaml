@@ -1,16 +1,16 @@
 workflows:
   android_release_signed:
-    name: Android Release (Signed)
+    name: Android Release (Signed, JDK21)
     instance_type: linux_x2
     max_build_duration: 45
 
     environment:
       vars:
         ANDROID_SDK_ROOT: /usr/local/share/android-sdk
-        JAVA_VERSION: 17
+        JAVA_VERSION: 21
         NODE_VERSION: 20
       android_signing:
-        - MyPlayKeystore   # use the keystore name you added in Codemagic UI
+        - MyPlayKeystore   # match the keystore name in Codemagic UI
 
     cache:
       cache_paths:
@@ -29,50 +29,23 @@ workflows:
           node -v && npm -v
 
       - name: Install dependencies
-        script: npm install
+        script: npm ci || npm install
 
-      - name: Build web (optional)
+      - name: Build web & sync Capacitor
         script: |
           npm run build || echo "No web build"
           npx cap sync android || echo "No capacitor"
-
-      - name: Create Java-17 enforcement script
-        script: |
-          cat > java17.init.gradle <<'EOF'
-          allprojects { proj ->
-            tasks.withType(JavaCompile).configureEach {
-              sourceCompatibility = JavaVersion.VERSION_17
-              targetCompatibility = JavaVersion.VERSION_17
-              options.release = 17
-            }
-            ['com.android.application','com.android.library','com.android.test'].each { pid ->
-              proj.plugins.withId(pid) {
-                def android = proj.extensions.findByName('android')
-                if (android != null) {
-                  android.compileOptions {
-                    sourceCompatibility = JavaVersion.VERSION_17
-                    targetCompatibility = JavaVersion.VERSION_17
-                  }
-                  if (android.hasProperty('kotlinOptions')) {
-                    android.kotlinOptions.jvmTarget = '17'
-                  }
-                }
-              }
-            }
-          }
-          EOF
 
       - name: Build Release (APK + AAB)
         script: |
           cd android
           chmod +x gradlew || true
-          ./gradlew --no-daemon -I ../java17.init.gradle \
-            clean assembleRelease bundleRelease
+          ./gradlew --no-daemon clean assembleRelease bundleRelease
 
       - name: List outputs
         script: |
-          echo "== APKs ==" && find android/app/build/outputs -name "*.apk" -print || true
-          echo "== AABs ==" && find android/app/build/outputs -name "*.aab" -print || true
+          echo "== APKs ==" && find app/build/outputs -name "*.apk" -print || true
+          echo "== AABs ==" && find app/build/outputs -name "*.aab" -print || true
 
     artifacts:
       - android/app/build/outputs/**/*.apk
