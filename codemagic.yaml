@@ -9,11 +9,8 @@ workflows:
         ANDROID_SDK_ROOT: /usr/local/share/android-sdk
         JAVA_VERSION: 17
         NODE_VERSION: 20
-        # Set to "true" to upload to Play (after you add the service account secret).
-        PLAY_UPLOAD: "false"
+        PLAY_UPLOAD: "false" # change to "true" if you want to upload automatically
 
-      # Use a Keystore you added in Codemagic UI → Code signing → Android.
-      # Rename "MyPlayKeystore" below to the exact name you gave it there.
       android_signing:
         - MyPlayKeystore
 
@@ -34,22 +31,19 @@ workflows:
           node -v && npm -v
 
       - name: Install dependencies
-        # Use npm install (works even without a lockfile)
         script: npm install
 
-      - name: Build web & sync Capacitor (safe if not used)
+      - name: Build web & sync Capacitor
         script: |
-          npm run build || echo "no web build script"
-          npx cap sync android || echo "no capacitor, continuing"
+          npm run build || echo "no web build"
+          npx cap sync android || echo "no capacitor"
 
-      - name: Force Java 17 (Gradle init script, no --release)
+      - name: Create Java 17 override (Gradle init script)
         script: |
           cat > java17.init.gradle <<'GROOVY'
           import org.gradle.api.tasks.compile.JavaCompile
           import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
-
           allprojects { proj ->
-            // Android compileOptions to 17
             ['com.android.application','com.android.library','com.android.test'].each { pid ->
               proj.plugins.withId(pid) {
                 def android = proj.extensions.findByName('android')
@@ -61,12 +55,10 @@ workflows:
                 }
               }
             }
-            // Plain JavaCompile fallback (NO options.release)
             proj.tasks.withType(JavaCompile).configureEach {
               sourceCompatibility = JavaVersion.VERSION_17
               targetCompatibility = JavaVersion.VERSION_17
             }
-            // Kotlin jvmTarget 17
             proj.tasks.withType(KotlinCompile).configureEach {
               kotlinOptions.jvmTarget = '17'
             }
@@ -77,20 +69,19 @@ workflows:
         script: |
           cd android
           chmod +x gradlew || true
-          ./gradlew --no-daemon -I ../java17.init.gradle clean \
-            assembleRelease bundleRelease
+          ./gradlew --no-daemon -I ../java17.init.gradle clean assembleRelease bundleRelease
 
       - name: List outputs
         script: |
           echo "== APKs ==" && find android/app/build/outputs -name "*.apk" -print || true
           echo "== AABs ==" && find android/app/build/outputs -name "*.aab" -print || true
 
-      - name: Upload to Google Play (Internal) if enabled
+      - name: Optional Play upload
         script: |
           if [ "$PLAY_UPLOAD" = "true" ]; then
-            echo "Uploading to Play Internal track..."
+            echo "Would upload AAB via Codemagic Play integration."
           else
-            echo "PLAY_UPLOAD=false -> skipping Play upload"
+            echo "Skipping Play upload (PLAY_UPLOAD=false)"
           fi
 
     artifacts:
@@ -106,14 +97,3 @@ workflows:
         notify:
           success: true
           failure: true
-
-      # Enable Play upload by:
-      # 1) Setting PLAY_UPLOAD="true" above
-      # 2) Adding env var GOOGLE_PLAY_CREDENTIALS in Codemagic (Service Account JSON)
-      # Codemagic will use AAB by default.
-      google_play:
-        enabled: true
-        submit_as_draft: true
-        track: internal
-        # Name of the env var that holds your service account JSON (paste JSON as the variable value).
-        credentials: $GOOGLE_PLAY_CREDENTIALS
