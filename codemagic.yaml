@@ -1,6 +1,6 @@
 workflows:
   android_release_signed:
-    name: Android Release (Signed + optional Play upload)
+    name: Android Release (Signed)
     instance_type: linux_x2
     max_build_duration: 45
 
@@ -9,8 +9,7 @@ workflows:
         ANDROID_SDK_ROOT: /usr/local/share/android-sdk
         JAVA_VERSION: 17
         NODE_VERSION: 20
-        PLAY_UPLOAD: "false" # change to "true" if you want to upload automatically
-
+      # change this to match the name of the keystore you added in Codemagic UI
       android_signing:
         - MyPlayKeystore
 
@@ -33,17 +32,16 @@ workflows:
       - name: Install dependencies
         script: npm install
 
-      - name: Build web & sync Capacitor
+      - name: Build web & sync Capacitor (safe to skip if not used)
         script: |
           npm run build || echo "no web build"
           npx cap sync android || echo "no capacitor"
 
-      - name: Create Java 17 override (Gradle init script)
+      - name: Create Java 17 override (Gradle init script, no Kotlin imports)
         script: |
           cat > java17.init.gradle <<'GROOVY'
-          import org.gradle.api.tasks.compile.JavaCompile
-          import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
           allprojects { proj ->
+            // Force Android modules to Java 17
             ['com.android.application','com.android.library','com.android.test'].each { pid ->
               proj.plugins.withId(pid) {
                 def android = proj.extensions.findByName('android')
@@ -55,12 +53,10 @@ workflows:
                 }
               }
             }
-            proj.tasks.withType(JavaCompile).configureEach {
+            // Fallback for any plain JavaCompile tasks
+            tasks.withType(JavaCompile).configureEach {
               sourceCompatibility = JavaVersion.VERSION_17
               targetCompatibility = JavaVersion.VERSION_17
-            }
-            proj.tasks.withType(KotlinCompile).configureEach {
-              kotlinOptions.jvmTarget = '17'
             }
           }
           GROOVY
@@ -69,20 +65,13 @@ workflows:
         script: |
           cd android
           chmod +x gradlew || true
-          ./gradlew --no-daemon -I ../java17.init.gradle clean assembleRelease bundleRelease
+          ./gradlew --no-daemon -I ../java17.init.gradle clean \
+            assembleRelease bundleRelease
 
       - name: List outputs
         script: |
           echo "== APKs ==" && find android/app/build/outputs -name "*.apk" -print || true
           echo "== AABs ==" && find android/app/build/outputs -name "*.aab" -print || true
-
-      - name: Optional Play upload
-        script: |
-          if [ "$PLAY_UPLOAD" = "true" ]; then
-            echo "Would upload AAB via Codemagic Play integration."
-          else
-            echo "Skipping Play upload (PLAY_UPLOAD=false)"
-          fi
 
     artifacts:
       - android/app/build/outputs/**/*.apk
