@@ -14,7 +14,6 @@ workflows:
           keytool -genkey -v -keystore android/verum-dummy.jks -storepass Verum123! -keypass Verum123! \
             -alias verum -keyalg RSA -keysize 2048 -validity 10000 \
             -dname "CN=Verum, OU=Omnis, O=Foundation, L=Global, ST=World, C=AI"
-
           {
             echo "VOM_KEYSTORE=verum-dummy.jks"
             echo "VOM_KEYSTORE_PASSWORD=Verum123!"
@@ -22,12 +21,11 @@ workflows:
             echo "VOM_KEY_PASSWORD=Verum123!"
           } >> android/gradle.properties || true
 
-          echo "== 1) Install deps & web build =="
+          echo "== 1) Install deps & build web =="
           npm ci --legacy-peer-deps || npm install --legacy-peer-deps
           npm run build || npx vite build || true
 
           echo "== 2) Normalize webDir to ./www =="
-          # Decide where the bundler output landed
           OUT=""
           [ -d dist ]  && OUT="dist"
           [ -d build ] && OUT="build"
@@ -41,11 +39,9 @@ workflows:
 
           echo "== 3) Ensure capacitor.config webDir = 'www' =="
           if [ -f capacitor.config.json ]; then
-            # Patch JSON
             node -e "let fs=require('fs');let p='capacitor.config.json';let o=JSON.parse(fs.readFileSync(p,'utf8'));o.webDir='www';fs.writeFileSync(p,JSON.stringify(o,null,2));"
           elif [ -f capacitor.config.ts ]; then
-            # Replace webDir in TS (very tolerant)
-            perl -0777 -pe "s/webDir:\s*['\"][^'\"]*['\"]/webDir: 'www'/g; s/(defineConfig\(\{)([\s\S]*?)\}\)/\${1}\${2}\}/g" -i capacitor.config.ts
+            perl -0777 -pe "s/webDir:\s*['\"][^'\"]*['\"]/webDir: 'www'/g" -i capacitor.config.ts
             grep -q "webDir" capacitor.config.ts || echo "export default { webDir: 'www' }" > capacitor.config.ts
           elif [ -f capacitor.config.js ]; then
             perl -0777 -pe "s/webDir:\s*['\"][^'\"]*['\"]/webDir: 'www'/g" -i capacitor.config.js
@@ -57,15 +53,21 @@ workflows:
           echo "== 4) Capacitor sync =="
           npm i -g @capacitor/cli
           npx cap add android || echo "android already added"
-          npx cap sync android   # no --no-interactive
+          npx cap sync android
 
-          echo "== 5) Gradle assembleRelease =="
+          echo "== 5) Sanity check android project =="
+          ls -la android || true
+          test -f android/gradlew || { echo '❌ No gradlew in android/. Did sync fail?'; exit 1; }
+          test -d android/app/src/main || { echo '❌ android/app/src/main missing'; exit 1; }
+
+          echo "== 6) Gradle assembleRelease =="
           cd android
           chmod +x gradlew || true
+          ./gradlew --version
           ./gradlew --no-daemon clean
           ./gradlew --no-daemon :app:assembleRelease --stacktrace --info
 
-          echo "== 6) Show artifacts =="
+          echo "== 7) Show artifacts =="
           ls -lh app/build/outputs/apk/release || true
           echo "APK path => android/app/build/outputs/apk/release/app-release.apk"
 
