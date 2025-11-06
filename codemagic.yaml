@@ -8,25 +8,25 @@ workflows:
       - name: Build release APK
         script: |
           set -e
-
           echo "== 1) Dummy signing =="
           mkdir -p android
           keytool -genkey -v -keystore android/verum-dummy.jks -storepass Verum123! -keypass Verum123! \
             -alias verum -keyalg RSA -keysize 2048 -validity 10000 \
             -dname "CN=Verum, OU=Omnis, O=Foundation, L=Global, ST=World, C=AI"
-          echo "VOM_KEYSTORE=verum-dummy.jks"        >> android/gradle.properties
-          echo "VOM_KEYSTORE_PASSWORD=Verum123!"     >> android/gradle.properties
-          echo "VOM_KEY_ALIAS=verum"                 >> android/gradle.properties
-          echo "VOM_KEY_PASSWORD=Verum123!"          >> android/gradle.properties
 
-          echo "== 2) Install deps & build web (if present) =="
+          echo "== 2) Web build =="
           npm ci --legacy-peer-deps || npm install --legacy-peer-deps
-          if grep -q '"build":' package.json; then npm run build || true; fi
+          npm run build || npx vite build || true
 
-          echo "== 3) Capacitor add/sync =="
+          # Capacitor expects 'www' folder. Copy dist if vite was used.
+          if [ -d "dist" ]; then
+            echo "Copying dist → www"
+            rm -rf www && cp -r dist www
+          fi
+
+          echo "== 3) Capacitor sync =="
           npm install -g @capacitor/cli
-          npx cap add android || echo "android/ already present"
-          npx cap sync android
+          npx cap sync android --no-interactive
 
           echo "== 4) Gradle assembleRelease =="
           cd android
@@ -34,9 +34,9 @@ workflows:
           ./gradlew --no-daemon clean
           ./gradlew --no-daemon :app:assembleRelease --stacktrace --info
 
-          echo "== 5) Show APK path =="
+          echo "== 5) Artifacts =="
           ls -lh app/build/outputs/apk/release || true
-          echo "APK: android/app/build/outputs/apk/release/app-release.apk"
+          echo "APK path: android/app/build/outputs/apk/release/app-release.apk"
 
     artifacts:
       - android/app/build/outputs/**/*.apk
