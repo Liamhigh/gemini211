@@ -1,62 +1,46 @@
 workflows:
-  android_release_signed:
-    name: Android Release (Signed, JDK21)
+  android_release:
+    name: Verum Omnis — Build APK + AAB (Java 17)
     instance_type: linux_x2
     max_build_duration: 45
 
     environment:
+      java: 17
       vars:
-        ANDROID_SDK_ROOT: /usr/local/share/android-sdk
-        JAVA_VERSION: 21
-        NODE_VERSION: 20
-      android_signing:
-        - MyPlayKeystore   # match the keystore name in Codemagic UI
+        ANDROID_HOME: /opt/android-sdk
+        GRADLE_OPTS: -Xmx4096m
 
     cache:
       cache_paths:
-        - "~/.gradle/wrapper"
-        - "~/.gradle/caches"
-        - "~/.npm"
-        - "node_modules"
-        - "android/.gradle"
+        - ~/.gradle
+        - ~/.npm
+        - ~/.cache
 
     scripts:
-      - name: Setup Node
+      - name: Clean workspace
         script: |
-          source ~/.bashrc || true
-          nvm install $NODE_VERSION
-          nvm use $NODE_VERSION
-          node -v && npm -v
+          rm -rf android/build || true
+          rm -rf android/app/build || true
+          rm -rf node_modules || true
+          npm ci
 
-      - name: Install dependencies
-        script: npm ci || npm install
-
-      - name: Build web & sync Capacitor
-        script: |
-          npm run build || echo "No web build"
-          npx cap sync android || echo "No capacitor"
-
-      - name: Build Release (APK + AAB)
+      - name: Build Android release
         script: |
           cd android
-          chmod +x gradlew || true
-          ./gradlew --no-daemon clean assembleRelease bundleRelease
+          ./gradlew clean
+          ./gradlew assembleRelease bundleRelease
 
-      - name: List outputs
+      - name: Export artifacts
         script: |
-          echo "== APKs ==" && find app/build/outputs -name "*.apk" -print || true
-          echo "== AABs ==" && find app/build/outputs -name "*.aab" -print || true
+          mkdir -p $CM_BUILD_DIR/build_artifacts
+          cp android/app/build/outputs/apk/release/app-release.apk $CM_BUILD_DIR/build_artifacts/ || true
+          cp android/app/build/outputs/bundle/release/app-release.aab $CM_BUILD_DIR/build_artifacts/ || true
 
     artifacts:
-      - android/app/build/outputs/**/*.apk
-      - android/app/build/outputs/**/*.aab
-      - android/app/build/outputs/mapping/**/mapping.txt
-      - android/build/reports/**
+      - build_artifacts/*.apk
+      - build_artifacts/*.aab
 
     publishing:
       email:
         recipients:
           - liam@verumglobal.foundation
-        notify:
-          success: true
-          failure: true
