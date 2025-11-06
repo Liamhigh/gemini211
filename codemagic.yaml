@@ -17,16 +17,15 @@ workflows:
           echo "== 2) Web build =="
           npm ci --legacy-peer-deps || npm install --legacy-peer-deps
           npm run build || npx vite build || true
-
-          # Capacitor expects 'www' folder. Copy dist if vite was used.
           if [ -d "dist" ]; then
             echo "Copying dist → www"
             rm -rf www && cp -r dist www
           fi
 
-          echo "== 3) Capacitor sync =="
-          npm install -g @capacitor/cli
-          npx cap sync android --no-interactive
+          echo "== 3) Capacitor add/sync =="
+          npm i -g @capacitor/cli
+          npx cap add android || echo "android already added"
+          npx cap sync android   # <-- removed --no-interactive
 
           echo "== 4) Gradle assembleRelease =="
           cd android
