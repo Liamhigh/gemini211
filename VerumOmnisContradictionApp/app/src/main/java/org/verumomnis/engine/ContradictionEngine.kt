@@ -1,37 +1,24 @@
 package org.verumomnis.engine
 
 /**
- * ContradictionEngine - Core engine for detecting contradictions in text evidence.
+ * Layer 2 - Contradiction Engine
  *
- * This engine ingests text, splits it into sentences, and analyzes pairs of sentences
- * to detect potential contradictions based on keyword analysis and negation patterns.
+ * Purpose: Detect contradictions between any two sentences.
+ * Implements all seven contradiction rules for forensic analysis.
+ *
+ * All operations are deterministic, rule-based, and non-AI.
+ * Logic MUST NEVER change based on evidence.
  */
 class ContradictionEngine {
 
-    private val sentences = mutableListOf<Sentence>()
-
-    /**
-     * Ingests raw text evidence and splits it into individual sentences.
-     *
-     * @param text The raw text to be analyzed
-     */
-    fun ingest(text: String) {
-        sentences.clear()
-        val splitSentences = text.split(Regex("[.!?]+"))
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-
-        splitSentences.forEachIndexed { index, sentenceText ->
-            sentences.add(Sentence(sentenceText, index))
-        }
-    }
-
     /**
      * Analyzes all pairs of sentences to find potential contradictions.
+     * Implements Rules 1-7 as specified in the Verum Omnis specification.
      *
+     * @param sentences List of sentences to analyze
      * @return List of ContradictionResult objects representing detected contradictions
      */
-    fun analyze(): List<ContradictionResult> {
+    fun analyze(sentences: List<Sentence>): List<ContradictionResult> {
         val results = mutableListOf<ContradictionResult>()
 
         for (i in sentences.indices) {
@@ -39,7 +26,7 @@ class ContradictionEngine {
                 val a = sentences[i]
                 val b = sentences[j]
 
-                val reason = detectContradiction(a.text, b.text)
+                val reason = contradictionRule(a, b)
                 if (reason != null) {
                     results.add(ContradictionResult(a, b, reason))
                 }
@@ -50,48 +37,278 @@ class ContradictionEngine {
     }
 
     /**
-     * Detects if two sentences contain a contradiction.
+     * Applies all contradiction rules to a pair of sentences.
      *
-     * @param textA First sentence text
-     * @param textB Second sentence text
-     * @return Reason for contradiction, or null if no contradiction detected
+     * @param a First sentence
+     * @param b Second sentence
+     * @return Reason string if contradiction detected, null otherwise
      */
-    private fun detectContradiction(textA: String, textB: String): String? {
-        val lowerA = textA.lowercase()
-        val lowerB = textB.lowercase()
+    fun contradictionRule(a: Sentence, b: Sentence): String? {
+        val textA = a.text.lowercase()
+        val textB = b.text.lowercase()
 
-        // Check for negation patterns
-        val negationPatterns = listOf(
-            "not", "never", "no ", "don't", "doesn't", "didn't", "wasn't",
-            "weren't", "isn't", "aren't", "won't", "wouldn't", "couldn't",
-            "shouldn't", "can't", "cannot"
-        )
-
-        val aHasNegation = negationPatterns.any { lowerA.contains(it) }
-        val bHasNegation = negationPatterns.any { lowerB.contains(it) }
-
-        // Extract key words (nouns/verbs) for comparison
-        val keyWordsA = extractKeyWords(lowerA)
-        val keyWordsB = extractKeyWords(lowerB)
-
-        // Find common key words
+        // Extract key words for topic comparison
+        val keyWordsA = extractKeyWords(textA)
+        val keyWordsB = extractKeyWords(textB)
         val commonWords = keyWordsA.intersect(keyWordsB)
 
-        // If there are common key words and one has negation while the other doesn't
+        // RULE 1 — Direct Negation
+        val rule1 = checkDirectNegation(textA, textB, commonWords)
+        if (rule1 != null) return rule1
+
+        // RULE 2 — Denial vs Evidence
+        val rule2 = checkDenialVsEvidence(textA, textB, commonWords)
+        if (rule2 != null) return rule2
+
+        // RULE 3 — Timeline Conflicts
+        val rule3 = checkTimelineConflicts(textA, textB, commonWords)
+        if (rule3 != null) return rule3
+
+        // RULE 4 — Quantity Conflicts
+        val rule4 = checkQuantityConflicts(textA, textB, commonWords)
+        if (rule4 != null) return rule4
+
+        // RULE 5 — Admission vs Later Denial
+        val rule5 = checkAdmissionVsDenial(textA, textB, commonWords)
+        if (rule5 != null) return rule5
+
+        // RULE 6 — Action vs Outcome Conflict
+        val rule6 = checkActionVsOutcome(textA, textB, commonWords)
+        if (rule6 != null) return rule6
+
+        // RULE 7 — Data Access Claim Conflicts
+        val rule7 = checkDataAccessConflicts(textA, textB, commonWords)
+        if (rule7 != null) return rule7
+
+        return null
+    }
+
+    /**
+     * RULE 1 — Direct Negation
+     * If one sentence contains 'never', 'did not', 'no', while the other affirms same event.
+     */
+    private fun checkDirectNegation(textA: String, textB: String, commonWords: Set<String>): String? {
+        if (commonWords.isEmpty()) return null
+
+        val negationPatterns = listOf(
+            "never", "did not", "didn't", "do not", "don't", "does not", "doesn't",
+            "was not", "wasn't", "were not", "weren't", "is not", "isn't",
+            "are not", "aren't", "will not", "won't", "would not", "wouldn't",
+            "could not", "couldn't", "should not", "shouldn't", "can not",
+            "cannot", "can't", "no "
+        )
+
+        val aHasNegation = negationPatterns.any { textA.contains(it) }
+        val bHasNegation = negationPatterns.any { textB.contains(it) }
+
         if (commonWords.isNotEmpty() && aHasNegation != bHasNegation) {
-            return "Potential negation contradiction on topic: ${commonWords.joinToString(", ")}"
+            return "RULE 1 - Direct Negation: One statement negates while other affirms regarding: ${commonWords.joinToString(", ")}"
         }
 
-        // Check for opposite time references
-        val timeContradiction = detectTimeContradiction(lowerA, lowerB, commonWords)
-        if (timeContradiction != null) {
-            return timeContradiction
+        return null
+    }
+
+    /**
+     * RULE 2 — Denial vs Evidence
+     * "no payment" vs "payment made", "I never met him" vs "we met Monday"
+     */
+    private fun checkDenialVsEvidence(textA: String, textB: String, commonWords: Set<String>): String? {
+        val denialEvidencePairs = listOf(
+            Pair("no payment", "payment"),
+            Pair("never met", "met"),
+            Pair("never spoke", "spoke"),
+            Pair("never sent", "sent"),
+            Pair("never received", "received"),
+            Pair("no contact", "contact"),
+            Pair("no communication", "communicated"),
+            Pair("never agreed", "agreed"),
+            Pair("never signed", "signed"),
+            Pair("no record", "record")
+        )
+
+        for ((denial, evidence) in denialEvidencePairs) {
+            val aHasDenial = textA.contains(denial)
+            val bHasDenial = textB.contains(denial)
+            val aHasEvidence = textA.contains(evidence) && !textA.contains(denial)
+            val bHasEvidence = textB.contains(evidence) && !textB.contains(denial)
+
+            if ((aHasDenial && bHasEvidence) || (bHasDenial && aHasEvidence)) {
+                return "RULE 2 - Denial vs Evidence: '$denial' contradicts evidence of '$evidence'"
+            }
         }
 
-        // Check for quantity contradictions
-        val quantityContradiction = detectQuantityContradiction(lowerA, lowerB, commonWords)
-        if (quantityContradiction != null) {
-            return quantityContradiction
+        return null
+    }
+
+    /**
+     * RULE 3 — Timeline Conflicts
+     * Different months/dates for same event topic: (met, invoice, payment, call, meeting)
+     */
+    private fun checkTimelineConflicts(textA: String, textB: String, commonWords: Set<String>): String? {
+        if (commonWords.isEmpty()) return null
+
+        val eventTopics = setOf("met", "meeting", "invoice", "payment", "call", "email", "contract", "signed")
+        val hasEventTopic = commonWords.any { topic -> eventTopics.any { it in topic || topic in it } }
+
+        if (!hasEventTopic) return null
+
+        // Check for month conflicts
+        val months = listOf(
+            "january", "february", "march", "april", "may", "june",
+            "july", "august", "september", "october", "november", "december"
+        )
+
+        val monthsInA = months.filter { textA.contains(it) }
+        val monthsInB = months.filter { textB.contains(it) }
+
+        if (monthsInA.isNotEmpty() && monthsInB.isNotEmpty() && monthsInA.intersect(monthsInB.toSet()).isEmpty()) {
+            return "RULE 3 - Timeline Conflict: Different months (${monthsInA.first()} vs ${monthsInB.first()}) for same event: ${commonWords.joinToString(", ")}"
+        }
+
+        // Check for day conflicts (Monday vs Friday, etc.)
+        val days = listOf("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+        val daysInA = days.filter { textA.contains(it) }
+        val daysInB = days.filter { textB.contains(it) }
+
+        if (daysInA.isNotEmpty() && daysInB.isNotEmpty() && daysInA.intersect(daysInB.toSet()).isEmpty()) {
+            return "RULE 3 - Timeline Conflict: Different days (${daysInA.first()} vs ${daysInB.first()}) for same event: ${commonWords.joinToString(", ")}"
+        }
+
+        // Check for time of day conflicts
+        val morningTerms = setOf("morning", "am", "early", "sunrise", "dawn")
+        val eveningTerms = setOf("evening", "pm", "night", "sunset", "dusk", "late")
+
+        val aHasMorning = morningTerms.any { textA.contains(it) }
+        val aHasEvening = eveningTerms.any { textA.contains(it) }
+        val bHasMorning = morningTerms.any { textB.contains(it) }
+        val bHasEvening = eveningTerms.any { textB.contains(it) }
+
+        if ((aHasMorning && bHasEvening) || (aHasEvening && bHasMorning)) {
+            return "RULE 3 - Timeline Conflict: Morning vs evening contradiction for: ${commonWords.joinToString(", ")}"
+        }
+
+        return null
+    }
+
+    /**
+     * RULE 4 — Quantity Conflicts
+     * Different numbers for same subject: ("one meeting" vs "three meetings")
+     */
+    private fun checkQuantityConflicts(textA: String, textB: String, commonWords: Set<String>): String? {
+        if (commonWords.isEmpty()) return null
+
+        // Extract numbers from both texts (including word numbers)
+        val numberWords = mapOf(
+            "one" to 1, "two" to 2, "three" to 3, "four" to 4, "five" to 5,
+            "six" to 6, "seven" to 7, "eight" to 8, "nine" to 9, "ten" to 10,
+            "zero" to 0, "none" to 0, "no" to 0
+        )
+
+        val numbersA = mutableListOf<Int>()
+        val numbersB = mutableListOf<Int>()
+
+        // Extract digit numbers
+        numbersA.addAll(Regex("\\d+").findAll(textA).map { it.value.toInt() })
+        numbersB.addAll(Regex("\\d+").findAll(textB).map { it.value.toInt() })
+
+        // Extract word numbers
+        for ((word, num) in numberWords) {
+            if (textA.contains(word)) numbersA.add(num)
+            if (textB.contains(word)) numbersB.add(num)
+        }
+
+        if (numbersA.isNotEmpty() && numbersB.isNotEmpty()) {
+            val maxA = numbersA.maxOrNull() ?: 0
+            val maxB = numbersB.maxOrNull() ?: 0
+
+            if (maxA != maxB) {
+                return "RULE 4 - Quantity Conflict: Different quantities ($maxA vs $maxB) regarding: ${commonWords.joinToString(", ")}"
+            }
+        }
+
+        return null
+    }
+
+    /**
+     * RULE 5 — Admission vs Later Denial
+     * "I agreed" vs "I never agreed"
+     */
+    private fun checkAdmissionVsDenial(textA: String, textB: String, commonWords: Set<String>): String? {
+        val admissionPatterns = listOf(
+            "i agreed", "i accepted", "i confirmed", "i approved", "i authorized",
+            "i admitted", "i acknowledged", "i consented", "yes i did", "i did it",
+            "i was there", "i took", "i received", "i sent"
+        )
+
+        val denialPatterns = listOf(
+            "never agreed", "never accepted", "never confirmed", "never approved",
+            "never authorized", "never admitted", "never acknowledged", "never consented",
+            "i did not", "i didn't", "i wasn't there", "never took", "never received", "never sent"
+        )
+
+        val aHasAdmission = admissionPatterns.any { textA.contains(it) }
+        val bHasAdmission = admissionPatterns.any { textB.contains(it) }
+        val aHasDenial = denialPatterns.any { textA.contains(it) }
+        val bHasDenial = denialPatterns.any { textB.contains(it) }
+
+        if ((aHasAdmission && bHasDenial) || (bHasAdmission && aHasDenial)) {
+            return "RULE 5 - Admission vs Denial: Prior admission contradicts later denial"
+        }
+
+        return null
+    }
+
+    /**
+     * RULE 6 — Action vs Outcome Conflict
+     * "I sent nothing" vs "email attached"
+     */
+    private fun checkActionVsOutcome(textA: String, textB: String, commonWords: Set<String>): String? {
+        val actionOutcomePairs = listOf(
+            Pair(listOf("sent nothing", "never sent", "did not send"), listOf("email attached", "attachment", "sent email", "message received")),
+            Pair(listOf("never called", "no call", "did not call"), listOf("call log", "phone record", "spoke on phone")),
+            Pair(listOf("never paid", "no payment", "did not pay"), listOf("payment received", "transaction", "bank transfer")),
+            Pair(listOf("never signed", "did not sign"), listOf("signature", "signed document", "contract signed")),
+            Pair(listOf("never accessed", "did not access"), listOf("login record", "access log", "logged in"))
+        )
+
+        for ((noAction, outcomes) in actionOutcomePairs) {
+            val aHasNoAction = noAction.any { textA.contains(it) }
+            val bHasNoAction = noAction.any { textB.contains(it) }
+            val aHasOutcome = outcomes.any { textA.contains(it) }
+            val bHasOutcome = outcomes.any { textB.contains(it) }
+
+            if ((aHasNoAction && bHasOutcome) || (bHasNoAction && aHasOutcome)) {
+                return "RULE 6 - Action vs Outcome: Claimed inaction contradicts evidence of outcome"
+            }
+        }
+
+        return null
+    }
+
+    /**
+     * RULE 7 — Data Access Claim Conflicts
+     * "I did not access" vs evidence of access attempt
+     */
+    private fun checkDataAccessConflicts(textA: String, textB: String, commonWords: Set<String>): String? {
+        val accessDenials = listOf(
+            "did not access", "didn't access", "never accessed", "no access",
+            "did not login", "didn't login", "never logged in", "did not log in",
+            "never opened", "did not open", "never viewed", "did not view"
+        )
+
+        val accessEvidence = listOf(
+            "access log", "login record", "login attempt", "logged in", "accessed",
+            "opened file", "viewed document", "download record", "browsing history",
+            "ip address", "device log", "authentication", "session record"
+        )
+
+        val aHasDenial = accessDenials.any { textA.contains(it) }
+        val bHasDenial = accessDenials.any { textB.contains(it) }
+        val aHasEvidence = accessEvidence.any { textA.contains(it) }
+        val bHasEvidence = accessEvidence.any { textB.contains(it) }
+
+        if ((aHasDenial && bHasEvidence) || (bHasDenial && aHasEvidence)) {
+            return "RULE 7 - Data Access Conflict: Access denial contradicts access evidence"
         }
 
         return null
@@ -120,86 +337,5 @@ class ContradictionEngine {
         return text.split(Regex("\\W+"))
             .filter { it.length > 2 && it !in stopWords }
             .toSet()
-    }
-
-    /**
-     * Detects time-based contradictions between two sentences.
-     */
-    private fun detectTimeContradiction(
-        textA: String,
-        textB: String,
-        commonWords: Set<String>
-    ): String? {
-        if (commonWords.isEmpty()) return null
-
-        val morningTerms = setOf("morning", "am", "early", "sunrise", "dawn")
-        val eveningTerms = setOf("evening", "pm", "night", "sunset", "dusk", "late")
-
-        val aHasMorning = morningTerms.any { textA.contains(it) }
-        val aHasEvening = eveningTerms.any { textA.contains(it) }
-        val bHasMorning = morningTerms.any { textB.contains(it) }
-        val bHasEvening = eveningTerms.any { textB.contains(it) }
-
-        if ((aHasMorning && bHasEvening) || (aHasEvening && bHasMorning)) {
-            return "Time contradiction detected regarding: ${commonWords.joinToString(", ")}"
-        }
-
-        return null
-    }
-
-    /**
-     * Detects quantity contradictions between two sentences.
-     */
-    private fun detectQuantityContradiction(
-        textA: String,
-        textB: String,
-        commonWords: Set<String>
-    ): String? {
-        if (commonWords.isEmpty()) return null
-
-        // Extract numbers from both texts
-        val numbersA = Regex("\\d+").findAll(textA).map { it.value.toInt() }.toList()
-        val numbersB = Regex("\\d+").findAll(textB).map { it.value.toInt() }.toList()
-
-        // If both have numbers and they differ significantly
-        if (numbersA.isNotEmpty() && numbersB.isNotEmpty()) {
-            val maxA = numbersA.maxOrNull() ?: 0
-            val maxB = numbersB.maxOrNull() ?: 0
-
-            if (maxA != maxB && (maxA == 0 || maxB == 0 || maxA.toDouble() / maxB > 2 || maxB.toDouble() / maxA > 2)) {
-                return "Quantity discrepancy detected ($maxA vs $maxB) regarding: ${commonWords.joinToString(", ")}"
-            }
-        }
-
-        return null
-    }
-
-    /**
-     * Builds a formatted report from the analysis results.
-     *
-     * @param results List of contradiction results to include in the report
-     * @return Formatted string report
-     */
-    fun buildReport(results: List<ContradictionResult>): String {
-        if (results.isEmpty()) {
-            return "=== VERUM OMNIS CONTRADICTION REPORT ===\n\nNo contradictions detected in the provided evidence.\n"
-        }
-
-        val sb = StringBuilder()
-        sb.appendLine("=== VERUM OMNIS CONTRADICTION REPORT ===")
-        sb.appendLine()
-        sb.appendLine("Total contradictions found: ${results.size}")
-        sb.appendLine()
-
-        results.forEachIndexed { index, result ->
-            sb.appendLine("--- Contradiction #${index + 1} ---")
-            sb.appendLine("Statement A (Index ${result.a.index}): \"${result.a.text}\"")
-            sb.appendLine("Statement B (Index ${result.b.index}): \"${result.b.text}\"")
-            sb.appendLine("Reason: ${result.reason}")
-            sb.appendLine()
-        }
-
-        sb.appendLine("=== END OF REPORT ===")
-        return sb.toString()
     }
 }
