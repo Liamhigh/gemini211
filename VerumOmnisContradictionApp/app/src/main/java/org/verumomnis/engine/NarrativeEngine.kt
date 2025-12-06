@@ -58,9 +58,11 @@ class NarrativeEngine {
      * @return Epoch milliseconds if timestamp found, null otherwise
      */
     fun extractTimestamp(sentence: String): Long? {
-        // Try various date/time patterns
-        // Note: dd/MM/yyyy shares the same regex as MM/dd/yyyy, so we only keep one
-        // to avoid ambiguous parsing. The format used is MM/dd/yyyy (US locale).
+        // Date patterns ordered by specificity (most specific first)
+        // Note: We use MM/dd/yyyy format for US locale consistency.
+        // The dd/MM/yyyy format is intentionally excluded to avoid ambiguity
+        // since SimpleDateFormat cannot distinguish between the two when
+        // both day and month values are <= 12.
         val datePatterns = listOf(
             "yyyy-MM-dd HH:mm:ss" to Pattern.compile("\\d{4}-\\d{2}-\\d{2}\\s+\\d{2}:\\d{2}:\\d{2}"),
             "yyyy-MM-dd HH:mm" to Pattern.compile("\\d{4}-\\d{2}-\\d{2}\\s+\\d{2}:\\d{2}"),

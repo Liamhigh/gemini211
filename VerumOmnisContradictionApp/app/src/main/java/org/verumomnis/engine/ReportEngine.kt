@@ -133,11 +133,14 @@ class ReportEngine {
         if (legal.isEmpty()) {
             sb.appendLine("No legal classifications triggered.")
         } else {
+            // Build index map once to avoid O(n²) complexity from indexOf() in loop
+            val contradictionIndexMap = contradictions.withIndex().associate { it.value to it.index + 1 }
+
             for (finding in legal) {
                 sb.appendLine("Subject: ${formatLegalSubject(finding.subject)}")
                 sb.appendLine("Evidence:")
-                finding.contradictions.forEachIndexed { index, contradiction ->
-                    val contradictionIndex = contradictions.indexOf(contradiction) + 1
+                for (contradiction in finding.contradictions) {
+                    val contradictionIndex = contradictionIndexMap[contradiction] ?: 0
                     sb.appendLine("  - Contradiction #$contradictionIndex")
                 }
                 sb.appendLine()

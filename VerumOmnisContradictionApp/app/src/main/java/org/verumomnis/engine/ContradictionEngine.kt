@@ -11,6 +11,30 @@ package org.verumomnis.engine
  */
 class ContradictionEngine {
 
+    companion object {
+        /** Pre-compiled regex pattern for standalone 'no' word boundary matching */
+        private val NO_PATTERN = Regex("\\bno\\b")
+
+        /** Pre-compiled regex patterns for number words (word boundary matching) */
+        private val NUMBER_WORD_PATTERNS = mapOf(
+            Regex("\\bone\\b") to 1,
+            Regex("\\btwo\\b") to 2,
+            Regex("\\bthree\\b") to 3,
+            Regex("\\bfour\\b") to 4,
+            Regex("\\bfive\\b") to 5,
+            Regex("\\bsix\\b") to 6,
+            Regex("\\bseven\\b") to 7,
+            Regex("\\beight\\b") to 8,
+            Regex("\\bnine\\b") to 9,
+            Regex("\\bten\\b") to 10,
+            Regex("\\bzero\\b") to 0,
+            Regex("\\bnone\\b") to 0
+        )
+
+        /** Pre-compiled regex for extracting digit numbers */
+        private val DIGIT_PATTERN = Regex("\\d+")
+    }
+
     /**
      * Analyzes all pairs of sentences to find potential contradictions.
      * Implements Rules 1-7 as specified in the Verum Omnis specification.
@@ -98,11 +122,9 @@ class ContradictionEngine {
             "cannot", "can't"
         )
 
-        // Use word boundary regex for standalone 'no' to avoid false positives
-        val noPattern = Regex("\\bno\\b")
-
-        val aHasNegation = negationPatterns.any { textA.contains(it) } || noPattern.containsMatchIn(textA)
-        val bHasNegation = negationPatterns.any { textB.contains(it) } || noPattern.containsMatchIn(textB)
+        // Use pre-compiled word boundary regex for standalone 'no' to avoid false positives
+        val aHasNegation = negationPatterns.any { textA.contains(it) } || NO_PATTERN.containsMatchIn(textA)
+        val bHasNegation = negationPatterns.any { textB.contains(it) } || NO_PATTERN.containsMatchIn(textB)
 
         if (commonWords.isNotEmpty() && aHasNegation != bHasNegation) {
             return "RULE 1 - Direct Negation: One statement negates while other affirms regarding: ${commonWords.joinToString(", ")}"
@@ -200,26 +222,17 @@ class ContradictionEngine {
     private fun checkQuantityConflicts(textA: String, textB: String, commonWords: Set<String>): String? {
         if (commonWords.isEmpty()) return null
 
-        // Extract numbers from both texts (including word numbers)
-        // Note: 'no' is excluded as it appears in many non-quantity contexts
-        val numberWords = mapOf(
-            "one" to 1, "two" to 2, "three" to 3, "four" to 4, "five" to 5,
-            "six" to 6, "seven" to 7, "eight" to 8, "nine" to 9, "ten" to 10,
-            "zero" to 0, "none" to 0
-        )
-
         val numbersA = mutableListOf<Int>()
         val numbersB = mutableListOf<Int>()
 
-        // Extract digit numbers
-        numbersA.addAll(Regex("\\d+").findAll(textA).map { it.value.toInt() })
-        numbersB.addAll(Regex("\\d+").findAll(textB).map { it.value.toInt() })
+        // Extract digit numbers using pre-compiled pattern
+        numbersA.addAll(DIGIT_PATTERN.findAll(textA).map { it.value.toInt() })
+        numbersB.addAll(DIGIT_PATTERN.findAll(textB).map { it.value.toInt() })
 
-        // Extract word numbers using word boundary matching
-        for ((word, num) in numberWords) {
-            val wordPattern = Regex("\\b$word\\b")
-            if (wordPattern.containsMatchIn(textA)) numbersA.add(num)
-            if (wordPattern.containsMatchIn(textB)) numbersB.add(num)
+        // Extract word numbers using pre-compiled word boundary patterns
+        for ((pattern, num) in NUMBER_WORD_PATTERNS) {
+            if (pattern.containsMatchIn(textA)) numbersA.add(num)
+            if (pattern.containsMatchIn(textB)) numbersB.add(num)
         }
 
         if (numbersA.isNotEmpty() && numbersB.isNotEmpty()) {

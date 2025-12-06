@@ -215,7 +215,7 @@ class ContradictionEngineTest {
 
         assertTrue(report.isNotEmpty())
         assertTrue(report.contains("VERUM OMNIS FORENSIC ANALYSIS REPORT"))
-        assertTrue(manager.getSentences().size == 2)
+        assertEquals(2, manager.getSentences().size)
         assertTrue(manager.getContradictions().isNotEmpty())
     }
 
