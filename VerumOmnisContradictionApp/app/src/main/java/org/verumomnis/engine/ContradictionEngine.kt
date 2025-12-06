@@ -173,7 +173,9 @@ class ContradictionEngine {
         if (commonWords.isEmpty()) return null
 
         val eventTopics = setOf("met", "meeting", "invoice", "payment", "call", "email", "contract", "signed")
-        val hasEventTopic = commonWords.any { topic -> eventTopics.any { it in topic || topic in it } }
+        // Use intersect for efficient O(n) check instead of nested any()
+        val hasEventTopic = commonWords.intersect(eventTopics).isNotEmpty() ||
+                commonWords.any { word -> eventTopics.any { it.contains(word) || word.contains(it) } }
 
         if (!hasEventTopic) return null
 
@@ -186,7 +188,7 @@ class ContradictionEngine {
         val monthsInA = months.filter { textA.contains(it) }
         val monthsInB = months.filter { textB.contains(it) }
 
-        if (monthsInA.isNotEmpty() && monthsInB.isNotEmpty() && monthsInA.intersect(monthsInB.toSet()).isEmpty()) {
+        if (monthsInA.isNotEmpty() && monthsInB.isNotEmpty() && monthsInA.intersect(monthsInB).isEmpty()) {
             return "RULE 3 - Timeline Conflict: Different months (${monthsInA.first()} vs ${monthsInB.first()}) for same event: ${commonWords.joinToString(", ")}"
         }
 
@@ -195,7 +197,7 @@ class ContradictionEngine {
         val daysInA = days.filter { textA.contains(it) }
         val daysInB = days.filter { textB.contains(it) }
 
-        if (daysInA.isNotEmpty() && daysInB.isNotEmpty() && daysInA.intersect(daysInB.toSet()).isEmpty()) {
+        if (daysInA.isNotEmpty() && daysInB.isNotEmpty() && daysInA.intersect(daysInB).isEmpty()) {
             return "RULE 3 - Timeline Conflict: Different days (${daysInA.first()} vs ${daysInB.first()}) for same event: ${commonWords.joinToString(", ")}"
         }
 
