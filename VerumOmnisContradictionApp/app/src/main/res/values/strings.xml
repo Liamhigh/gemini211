@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Verum Omnis</string>
+    <string name="hint_case_name">Enter Case Name</string>
+    <string name="btn_create_case">Create Case</string>
+    <string name="case_detail_title">Case Details</string>
+    <string name="hint_add_text">Add Text Evidence</string>
+    <string name="btn_add_text">Add Text</string>
+    <string name="btn_add_image">Add Image (OCR)</string>
+    <string name="btn_generate_report">Generate Contradiction Report</string>
+</resources>
