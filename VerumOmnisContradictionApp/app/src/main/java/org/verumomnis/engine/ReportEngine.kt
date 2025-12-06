@@ -18,6 +18,15 @@ import java.util.Locale
  */
 class ReportEngine {
 
+    companion object {
+        /** Maximum length for truncated sentence display in the narrative table */
+        private const val MAX_SENTENCE_DISPLAY_LENGTH = 50
+        /** Suffix added to truncated sentences */
+        private const val TRUNCATION_SUFFIX = "..."
+        /** Effective text length when truncated (MAX_SENTENCE_DISPLAY_LENGTH - TRUNCATION_SUFFIX.length) */
+        private const val TRUNCATED_TEXT_LENGTH = MAX_SENTENCE_DISPLAY_LENGTH - 3
+    }
+
     /**
      * Builds the final structured forensic report.
      *
@@ -79,8 +88,8 @@ class ReportEngine {
             } else {
                 "N/A"
             }
-            val truncatedText = if (sentence.text.length > 50) {
-                sentence.text.substring(0, 47) + "..."
+            val truncatedText = if (sentence.text.length > MAX_SENTENCE_DISPLAY_LENGTH) {
+                sentence.text.substring(0, TRUNCATED_TEXT_LENGTH) + TRUNCATION_SUFFIX
             } else {
                 sentence.text
             }

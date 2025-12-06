@@ -59,13 +59,14 @@ class NarrativeEngine {
      */
     fun extractTimestamp(sentence: String): Long? {
         // Try various date/time patterns
+        // Note: dd/MM/yyyy shares the same regex as MM/dd/yyyy, so we only keep one
+        // to avoid ambiguous parsing. The format used is MM/dd/yyyy (US locale).
         val datePatterns = listOf(
             "yyyy-MM-dd HH:mm:ss" to Pattern.compile("\\d{4}-\\d{2}-\\d{2}\\s+\\d{2}:\\d{2}:\\d{2}"),
             "yyyy-MM-dd HH:mm" to Pattern.compile("\\d{4}-\\d{2}-\\d{2}\\s+\\d{2}:\\d{2}"),
             "yyyy-MM-dd" to Pattern.compile("\\d{4}-\\d{2}-\\d{2}"),
             "MM/dd/yyyy HH:mm" to Pattern.compile("\\d{2}/\\d{2}/\\d{4}\\s+\\d{2}:\\d{2}"),
-            "MM/dd/yyyy" to Pattern.compile("\\d{2}/\\d{2}/\\d{4}"),
-            "dd/MM/yyyy" to Pattern.compile("\\d{2}/\\d{2}/\\d{4}")
+            "MM/dd/yyyy" to Pattern.compile("\\d{2}/\\d{2}/\\d{4}")
         )
 
         for ((format, pattern) in datePatterns) {

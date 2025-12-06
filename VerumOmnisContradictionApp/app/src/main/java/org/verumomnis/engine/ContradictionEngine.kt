@@ -95,11 +95,14 @@ class ContradictionEngine {
             "was not", "wasn't", "were not", "weren't", "is not", "isn't",
             "are not", "aren't", "will not", "won't", "would not", "wouldn't",
             "could not", "couldn't", "should not", "shouldn't", "can not",
-            "cannot", "can't", "no "
+            "cannot", "can't"
         )
 
-        val aHasNegation = negationPatterns.any { textA.contains(it) }
-        val bHasNegation = negationPatterns.any { textB.contains(it) }
+        // Use word boundary regex for standalone 'no' to avoid false positives
+        val noPattern = Regex("\\bno\\b")
+
+        val aHasNegation = negationPatterns.any { textA.contains(it) } || noPattern.containsMatchIn(textA)
+        val bHasNegation = negationPatterns.any { textB.contains(it) } || noPattern.containsMatchIn(textB)
 
         if (commonWords.isNotEmpty() && aHasNegation != bHasNegation) {
             return "RULE 1 - Direct Negation: One statement negates while other affirms regarding: ${commonWords.joinToString(", ")}"
@@ -198,10 +201,11 @@ class ContradictionEngine {
         if (commonWords.isEmpty()) return null
 
         // Extract numbers from both texts (including word numbers)
+        // Note: 'no' is excluded as it appears in many non-quantity contexts
         val numberWords = mapOf(
             "one" to 1, "two" to 2, "three" to 3, "four" to 4, "five" to 5,
             "six" to 6, "seven" to 7, "eight" to 8, "nine" to 9, "ten" to 10,
-            "zero" to 0, "none" to 0, "no" to 0
+            "zero" to 0, "none" to 0
         )
 
         val numbersA = mutableListOf<Int>()
@@ -211,10 +215,11 @@ class ContradictionEngine {
         numbersA.addAll(Regex("\\d+").findAll(textA).map { it.value.toInt() })
         numbersB.addAll(Regex("\\d+").findAll(textB).map { it.value.toInt() })
 
-        // Extract word numbers
+        // Extract word numbers using word boundary matching
         for ((word, num) in numberWords) {
-            if (textA.contains(word)) numbersA.add(num)
-            if (textB.contains(word)) numbersB.add(num)
+            val wordPattern = Regex("\\b$word\\b")
+            if (wordPattern.containsMatchIn(textA)) numbersA.add(num)
+            if (wordPattern.containsMatchIn(textB)) numbersB.add(num)
         }
 
         if (numbersA.isNotEmpty() && numbersB.isNotEmpty()) {
